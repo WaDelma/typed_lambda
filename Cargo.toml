@@ -1,0 +1,8 @@
+[package]
+name = "typed_lambda"
+version = "0.1.0"
+authors = ["delma <delma@del.ma>"]
+
+[dependencies]
+collect-mac = "0.1.0"
+ena = {path = "../ena"}#"0.8.0"
