@@ -13,7 +13,7 @@ use std::fmt;
 use self::TypecheckError::*;
 
 pub mod lexer;
-mod parser;
+pub mod parser;
 // mod inference;
 // mod test;
 

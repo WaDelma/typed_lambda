@@ -4,10 +4,10 @@ use unicode_xid::UnicodeXID;
 
 #[derive(PartialEq)]
 pub struct Token {
-    token: TokenType,
-    line: usize,
-    from_column: usize,
-    to_column: usize,
+    pub token: TokenType,
+    pub line: usize,
+    pub from_column: usize,
+    pub to_column: usize,
 }
 
 impl fmt::Debug for Token {
@@ -97,14 +97,14 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
         let mut buffer = String::new();
         let mut state = State::General;
         if let Some(c) = self.prev.take() {
-            match c {
-                '(' => return Some(self.tok(BracketStart)),
-                ')' => return Some(self.tok(BracketEnd)),
-                '.' => return Some(self.tok(Dot)),
-                '=' => return Some(self.tok(Equals)),
-                'λ' | '\\' => return Some(self.tok(Lambda)),
+            return Some(self.tok(match c {
+                '(' => BracketStart,
+                ')' => BracketEnd,
+                '.' => Dot,
+                '=' => Equals,
+                'λ' | '\\' => Lambda,
                 _ => unreachable!("Previous character should be one of '(', ')', '.', '=', '\\', 'λ'."),
-            }
+            }));
         }
         while let Some(c) = self.iter.next() {
             self.column += 1;
@@ -137,7 +137,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                         c if c.is_whitespace() => {
                             continue;
                         },
-                        c => return Some(self.tok(Error(UnknownCharacter(c)))),
+                        c => Error(UnknownCharacter(c)),
                     };
                     return Some(self.tok(tok));
                 },
