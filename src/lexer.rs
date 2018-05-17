@@ -223,7 +223,10 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
         }
         match state {
             State::General => None,
-            State::Ident => Some(self.tok(Ident(buffer))),
+            State::Ident => {
+                let from_column = self.column - buffer.len();
+                Some(Token::new(Ident(buffer), self.line, from_column, self.column))
+            },
             State::Let(n) => Some(if n == 3 {
                 self.tok(Let)
             } else {
@@ -234,13 +237,12 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
             } else {
                 self.tok(Ident("i".into()))
             }),
-            _ => panic!("Input ended too early."),
         }
     }
 }
 
 #[test]
-fn identity_unicode() {
+fn identity_abstraction_unicode() {
     use self::TokenType::*;
     assert_eq!(
         lexer("λx.x".chars()).collect::<Vec<_>>(),
@@ -254,7 +256,7 @@ fn identity_unicode() {
 }
 
 #[test]
-fn identity_ascii() {
+fn identity_abstraction_ascii() {
     use self::TokenType::*;
     assert_eq!(
         lexer("\\x.x".chars()).collect::<Vec<_>>(),
@@ -263,6 +265,20 @@ fn identity_ascii() {
             Token::new(Ident("x".into()), 0, 1, 2),
             Token::new(Dot, 0, 2, 3),
             Token::new(Ident("x".into()), 0, 3, 4),
+        ]
+    )
+}
+
+#[test]
+fn application() {
+    use self::TokenType::*;
+    assert_eq!(
+        lexer("(abc xyz)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(BracketStart, 0, 0, 1),
+            Token::new(Ident("abc".into()), 0, 1, 4),
+            Token::new(Ident("xyz".into()), 0, 5, 8),
+            Token::new(BracketEnd, 0, 8, 9),
         ]
     )
 }
