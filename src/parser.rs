@@ -1,7 +1,8 @@
 use std::fmt;
+use std::mem::replace;
 
 use Ident;
-use lexer::{Token, TokenType};
+use lexer::Token;
 
 #[derive(PartialEq)]
 pub struct Expr {
@@ -76,9 +77,30 @@ impl From<::lexer::LexError> for ParseError {
 
 enum State {
     General,
-    Bracket(u8),
-    Lambda(u8),
-    Let(u8),
+    Bracket(BracketState),
+    Lambda(LambdaState),
+    Let(LetState),
+}
+
+#[derive(Clone, Copy)]
+enum BracketState {
+    MiddleS,
+    EndS,
+}
+
+#[derive(Clone, Copy)]
+enum LambdaState {
+    ParamS,
+    BodyS,
+}
+
+#[derive(Clone, Copy)]
+enum LetState {
+    VarS,
+    EqS,
+    ValS,
+    InS,
+    ExprS,
 }
 
 pub struct Parser {
@@ -93,9 +115,22 @@ impl Parser {
     }
 }
 
+fn chain_apps(expr: &mut Option<Expr>, value: Expr) {
+    *expr = Some(if let Some(e) = expr.take() {
+        let (from, to) = (e.from, value.to);
+        let app = ExprType::App(Box::new(e), Box::new(value));
+        Expr::new(app, from, to)
+    } else {
+        value
+    });
+}
+
 impl Parser {
     pub fn parse<I: Iterator<Item=Token>>(&mut self, tokens: &mut I) -> Expr {
         use lexer::TokenType::*;
+        use self::LetState::*;
+        use self::LambdaState::*;
+        use self::BracketState::*;
         let mut params = vec![];
         let mut value = vec![];
         let mut expr = None::<Expr>;
@@ -106,153 +141,92 @@ impl Parser {
             let to = token.to();
             match state {
                 State::General => match token.token {
-                    Error(err) => {
-                        let err = Expr::new(ExprType::Error(err.into()), from, to);
-                        expr = Some(if let Some(e) = expr.take() {
-                            let from = e.from;
-                            let to = e.to;
-                            Expr::new(
-                                ExprType::App(Box::new(e), Box::new(err)),
-                                from,
-                                to,
-                            )
-                        } else {
-                            err
-                        });
-                    },
+                    Error(err) => chain_apps(
+                        &mut expr,
+                        Expr::new(ExprType::Error(err.into()), from, to)
+                    ),
                     Lambda => {
                         start = Some(from);
-                        state = State::Lambda(1)
+                        state = State::Lambda(LambdaState::ParamS)
                     },
                     BracketStart => {
                         start = Some(from);
-                        state = State::Bracket(1);
+                        state = State::Bracket(BracketState::MiddleS);
                     },
                     Let => {
                         start = Some(from);
-                        state = State::Let(1);
+                        state = State::Let(LetState::VarS);
                     },
-                    BracketEnd => if let Some(e) = expr {
+                    BracketEnd | In => if let Some(e) = expr {
                         self.prev = Some(token);
                         return e;
                     } else {
                         panic!("Invalid token: {:?}", token);
                     },
-                    In => if let Some(e) = expr {
-                        self.prev = Some(token);
-                        return e;
-                    } else {
-                        panic!("Invalid token: {:?}", token);
-                    },
-                    Ident(i) => {
-                        let var = Expr::new(ExprType::Var(i), from, to);
-                        expr = Some(if let Some(e) = expr.take() {
-                            let (from, to) = (e.from, var.to);
-                            Expr::new(
-                                ExprType::App(Box::new(e), Box::new(var)),
-                                from,
-                                to,
-                            )
-                        } else {
-                            var
-                        });
-                    },
+                    Ident(i) => chain_apps(
+                        &mut expr,
+                        Expr::new(ExprType::Var(i), from, to)
+                    ),
                     _ => panic!("Invalid token: {:?}", token),
                 },
                 State::Lambda(n) => match n {
-                    1 => match token.token {
+                    ParamS => match token.token {
                         Ident(i) => params.push(i),
-                        Dot => state = State::Lambda(2),
+                        Dot => state = State::Lambda(BodyS),
                         _ => panic!("Invalid token: {:?}", token),
                     }
-                    2 => {
-                        let from = start.unwrap();
+                    BodyS => {
                         self.prev = Some(token);
-                        let body = Box::new(self.parse(tokens));
-                        let abs = Expr::new(ExprType::Abs(params, body), from, to);
-                        params = vec![];
-                        expr = Some(if let Some(e) = expr.take() {
-                            let (from, to) = (e.from, abs.to);
-                            Expr::new(
-                                ExprType::App(Box::new(e), Box::new(abs)),
-                                from,
-                                to,
-                            )
-                        } else {
-                            abs
-                        });
-                    },
-                    _ => unreachable!("State cannot be reached"),
+                        let body = Box::new(self.parse(tokens)); // TODO: Remove recursion
+                        let abs = ExprType::Abs(replace(&mut params, vec![]), body);
+                        chain_apps(&mut expr, Expr::new(abs, start.unwrap(), to));
+                    }
                 },
                 State::Bracket(n) => match n {
-                    1 => {
+                    MiddleS => {
                         self.prev = Some(token);
-                        let mut ex = self.parse(tokens);
-                        expr = Some(if let Some(e) = expr.take() {
-                            let (from, to) = (start.unwrap(), ex.to);
-                            Expr::new(
-                                ExprType::App(Box::new(e), Box::new(ex)),
-                                from,
-                                to,
-                            )
-                        } else {
-                            ex.from.1 -= 1;
-                            ex.to.1 += 1;
-                            ex
-                        });
-                        state = State::Bracket(2);
-                    }
-                    2 => match token.token {
+                        let mut ex = self.parse(tokens); // TODO: Remove recursion
+                        ex.from.1 -= 1;
+                        ex.to.1 += 1;
+                        chain_apps(&mut expr, ex);
+                        state = State::Bracket(EndS);
+                    },
+                    EndS => match token.token {
                         BracketEnd => state = State::General,
                         _ => panic!("Invalid token: {:?}", token),
                     },
-                    _ => unreachable!("State cannot be reached"),
                 },
                 State::Let(n) => match n {
-                    1 => match token.token {
+                    VarS => match token.token {
                         Ident(i) => {
                             params.push(i);
-                            state = State::Let(2);
+                            state = State::Let(EqS);
                         },
                         _ => panic!("Invalid token: {:?}", token),
                     },
-                    2 => match token.token {
-                        Equals if n == 2 => state = State::Let(3),
+                    EqS => match token.token {
+                        Equals => state = State::Let(ValS),
                         _ => panic!("Invalid token: {:?}", token),
                     },
-                    3 => {
+                    ValS => {
                         self.prev = Some(token);
-                        value.push(self.parse(tokens));
-                        state = State::Let(4);
+                        value.push(self.parse(tokens)); // TODO: Remove recursion
+                        state = State::Let(InS);
                     },
-                    4 => match token.token {
-                        In => state = State::Let(5),
+                    InS => match token.token {
+                        In => state = State::Let(ExprS),
                         _ => panic!("Invalid token: {:?}", token),
-                    }
-                    5 => {
+                    },
+                    ExprS => {
                         let from = start.unwrap();
                         self.prev = Some(token);
-                        let let_ = Expr::new(
-                            ExprType::Let(
-                                params.pop().unwrap(),
-                                Box::new(value.pop().unwrap()),
-                                Box::new(self.parse(tokens))
-                            ),
-                            from,
-                            to,
+                        let let_ = ExprType::Let(
+                            params.pop().unwrap(),
+                            Box::new(value.pop().unwrap()),
+                            Box::new(self.parse(tokens)) // TODO: Remove recursion
                         );
-                        expr = Some(if let Some(e) = expr {
-                            let (from, to) = (e.from, let_.to);
-                            Expr::new(
-                                ExprType::App(Box::new(e), Box::new(let_)),
-                                from,
-                                to,
-                            )
-                        } else {
-                            let_
-                        });
+                        chain_apps(&mut expr, Expr::new(let_, from, to));
                     },
-                    _ => unreachable!("State cannot be reached"),
                 },
             }
         }

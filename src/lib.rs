@@ -3,14 +3,14 @@ extern crate collect_mac;
 extern crate ena;
 extern crate unicode_xid;
 
-use ena::unify::{UnifyKey, UnifyValue};
-use ena::unify::InPlaceUnificationTable as UnificationTable;
+// use ena::unify::{UnifyKey, UnifyValue};
+// use ena::unify::InPlaceUnificationTable as UnificationTable;
 
-use std::collections::{HashMap, HashSet};
-use std::fmt;
+// use std::collections::{HashMap, HashSet};
+// use std::fmt;
 // use inference::{InferVar, InferenceTable};
 
-use self::TypecheckError::*;
+// use self::TypecheckError::*;
 
 pub mod lexer;
 pub mod parser;

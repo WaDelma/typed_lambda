@@ -327,7 +327,6 @@ fn splitting_lines() {
 #[test]
 fn ends_with_i() {
     use self::TokenType::*;
-    use self::LexError::*;
     assert_eq!(
         lexer("i".chars()).collect::<Vec<_>>(),
         vec![
@@ -339,7 +338,6 @@ fn ends_with_i() {
 #[test]
 fn ends_with_l() {
     use self::TokenType::*;
-    use self::LexError::*;
     assert_eq!(
         lexer("l".chars()).collect::<Vec<_>>(),
         vec![
@@ -351,7 +349,6 @@ fn ends_with_l() {
 #[test]
 fn ends_with_le() {
     use self::TokenType::*;
-    use self::LexError::*;
     assert_eq!(
         lexer("le".chars()).collect::<Vec<_>>(),
         vec![
