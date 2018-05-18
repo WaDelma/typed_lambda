@@ -4,7 +4,44 @@ use Ident;
 use lexer::{Token, TokenType};
 
 #[derive(PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    expr: ExprType,
+    from: (usize, usize),
+    to: (usize, usize),
+}
+
+impl Expr {
+    pub fn new(expr: ExprType, from: (usize, usize), to: (usize, usize)) -> Self {
+        Expr {
+            expr,
+            from,
+            to,
+        }
+    }
+}
+
+impl fmt::Debug for Expr {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "{:?} at {from_line}:{from_column}→{to_line}:{to_column}",
+            self.expr,
+            from_line=self.from.0,
+            from_column=self.from.1,
+            to_line=self.to.0,
+            to_column=self.to.1,
+        )
+    }
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}", self.expr)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ExprType {
     Error(ParseError),
     Var(Ident),
     App(Box<Expr>, Box<Expr>),
@@ -12,15 +49,15 @@ pub enum Expr {
     Let(Ident, Box<Expr>, Box<Expr>),
 }
 
-impl fmt::Debug for Expr {
+impl fmt::Display for ExprType {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        use self::Expr::*;
+        use self::ExprType::*;
         match *self {
             Error(ref e) => write!(fmt, "{:?}", e),
             Var(ref ident) => fmt.write_str(ident),
-            App(ref lhs, ref rhs) => write!(fmt, "({:?}) {:?}", lhs, rhs),
-            Abs(ref ident, ref rhs) => write!(fmt, "λ{}.{:?}", ident.join(" "), rhs),
-            Let(ref ident, ref value, ref target) => write!(fmt, "let {} = {:?} in {:?}", ident, value, target),
+            App(ref lhs, ref rhs) => write!(fmt, "({}) {}", lhs, rhs),
+            Abs(ref ident, ref rhs) => write!(fmt, "λ{}.{}", ident.join(" "), rhs),
+            Let(ref ident, ref value, ref target) => write!(fmt, "let {} = {} in {}", ident, value, target),
         }
     }
 }
@@ -39,17 +76,17 @@ impl From<::lexer::LexError> for ParseError {
 
 enum State {
     General,
+    Bracket(u8),
     Lambda(u8),
     Let(u8),
-    App(u8),
 }
 
-struct Parser {
+pub struct Parser {
     prev: Option<Token>
 }
 
 impl Parser {
-    fn new() -> Parser {
+    pub fn new() -> Parser {
         Parser {
             prev: None,
         }
@@ -57,37 +94,65 @@ impl Parser {
 }
 
 impl Parser {
-    // TODO: Track positions
     pub fn parse<I: Iterator<Item=Token>>(&mut self, tokens: &mut I) -> Expr {
         use lexer::TokenType::*;
         let mut params = vec![];
         let mut value = vec![];
-        let mut expr = None;
+        let mut expr = None::<Expr>;
         let mut state = State::General;
+        let mut start = None;
         while let Some(token) = self.prev.take().or_else(|| tokens.next()) {
+            let from = token.from();
+            let to = token.to();
             match state {
                 State::General => match token.token {
                     Error(err) => {
-                        let err = Expr::Error(err.into());
+                        let err = Expr::new(ExprType::Error(err.into()), from, to);
                         expr = Some(if let Some(e) = expr.take() {
-                            Expr::App(Box::new(e), Box::new(err))
+                            let from = e.from;
+                            let to = e.to;
+                            Expr::new(
+                                ExprType::App(Box::new(e), Box::new(err)),
+                                from,
+                                to,
+                            )
                         } else {
                             err
                         });
                     },
-                    Lambda => state = State::Lambda(1),
-                    BracketStart => state = State::App(1),
+                    Lambda => {
+                        start = Some(from);
+                        state = State::Lambda(1)
+                    },
+                    BracketStart => {
+                        start = Some(from);
+                        state = State::Bracket(1);
+                    },
+                    Let => {
+                        start = Some(from);
+                        state = State::Let(1);
+                    },
                     BracketEnd => if let Some(e) = expr {
                         self.prev = Some(token);
                         return e;
                     } else {
                         panic!("Invalid token: {:?}", token);
                     },
-                    Let => state = State::Let(1),
+                    In => if let Some(e) = expr {
+                        self.prev = Some(token);
+                        return e;
+                    } else {
+                        panic!("Invalid token: {:?}", token);
+                    },
                     Ident(i) => {
-                        let var = Expr::Var(i);
+                        let var = Expr::new(ExprType::Var(i), from, to);
                         expr = Some(if let Some(e) = expr.take() {
-                            Expr::App(Box::new(e), Box::new(var))
+                            let (from, to) = (e.from, var.to);
+                            Expr::new(
+                                ExprType::App(Box::new(e), Box::new(var)),
+                                from,
+                                to,
+                            )
                         } else {
                             var
                         });
@@ -101,40 +166,44 @@ impl Parser {
                         _ => panic!("Invalid token: {:?}", token),
                     }
                     2 => {
-                        // TODO: What am I doing with token here?
+                        let from = start.unwrap();
                         self.prev = Some(token);
-                        let lambda = self.parse(tokens);
-                        let abs = Expr::Abs(params, Box::new(lambda));
+                        let body = Box::new(self.parse(tokens));
+                        let abs = Expr::new(ExprType::Abs(params, body), from, to);
                         params = vec![];
                         expr = Some(if let Some(e) = expr.take() {
-                            Expr::App(Box::new(e), Box::new(abs))
+                            let (from, to) = (e.from, abs.to);
+                            Expr::new(
+                                ExprType::App(Box::new(e), Box::new(abs)),
+                                from,
+                                to,
+                            )
                         } else {
                             abs
                         });
                     },
                     _ => unreachable!("State cannot be reached"),
                 },
-                State::App(n) => match n {
+                State::Bracket(n) => match n {
                     1 => {
                         self.prev = Some(token);
-                        value.push(self.parse(tokens));
-                        state = State::App(2);
-                    },
-                    2 => {
-                        self.prev = Some(token);
-                        value.push(self.parse(tokens));
-                        state = State::App(3);
-                    },
-                    3 => match token.token {
-                        BracketEnd => {
-                            let mut value = value.drain(..);
-                            let app = Expr::App(Box::new(value.next().unwrap()), Box::new(value.next().unwrap()));
-                            expr = Some(if let Some(e) = expr.take() {
-                                Expr::App(Box::new(e), Box::new(app))
-                            } else {
-                                app
-                            });
-                        },
+                        let mut ex = self.parse(tokens);
+                        expr = Some(if let Some(e) = expr.take() {
+                            let (from, to) = (start.unwrap(), ex.to);
+                            Expr::new(
+                                ExprType::App(Box::new(e), Box::new(ex)),
+                                from,
+                                to,
+                            )
+                        } else {
+                            ex.from.1 -= 1;
+                            ex.to.1 += 1;
+                            ex
+                        });
+                        state = State::Bracket(2);
+                    }
+                    2 => match token.token {
+                        BracketEnd => state = State::General,
                         _ => panic!("Invalid token: {:?}", token),
                     },
                     _ => unreachable!("State cannot be reached"),
@@ -161,10 +230,24 @@ impl Parser {
                         _ => panic!("Invalid token: {:?}", token),
                     }
                     5 => {
+                        let from = start.unwrap();
                         self.prev = Some(token);
-                        let let_ = Expr::Let(params.drain(..).next().unwrap(), Box::new(value.drain(..).next().unwrap()), Box::new(self.parse(tokens)));
+                        let let_ = Expr::new(
+                            ExprType::Let(
+                                params.pop().unwrap(),
+                                Box::new(value.pop().unwrap()),
+                                Box::new(self.parse(tokens))
+                            ),
+                            from,
+                            to,
+                        );
                         expr = Some(if let Some(e) = expr {
-                            Expr::App(Box::new(e), Box::new(let_))
+                            let (from, to) = (e.from, let_.to);
+                            Expr::new(
+                                ExprType::App(Box::new(e), Box::new(let_)),
+                                from,
+                                to,
+                            )
                         } else {
                             let_
                         });
@@ -176,99 +259,103 @@ impl Parser {
         if let Some(e) = expr {
             e
         } else {
-            Expr::Error(ParseError::MissingTokens)
+            Expr::new(
+                ExprType::Error(ParseError::MissingTokens),
+                (0, 0),
+                (0, 0)
+            )
         }
     }
 }
 
 #[test]
 fn identity_abstraction() {
-    use self::Expr::*;
+    use self::ExprType::*;
     use lexer::lexer;
     let mut parser = Parser::new();
     assert_eq!(
         parser.parse(&mut lexer("λx.x".chars())),
-        Abs(
+        Expr::new(Abs(
             vec!["x".into()],
-            Box::new(Var(
+            Box::new(Expr::new(Var(
                 "x".into()
-            ))
-        )
+            ), (0, 3), (0, 4)))
+        ), (0, 0), (0, 4))
     )
 }
 
 #[test]
 fn application() {
-    use self::Expr::*;
+    use self::ExprType::*;
     use lexer::lexer;
     let mut parser = Parser::new();
     assert_eq!(
         parser.parse(&mut lexer("a b c".chars())),
-        App(
-            Box::new(App(
-                Box::new(Var(
+        Expr::new(App(
+            Box::new(Expr::new(App(
+                Box::new(Expr::new(Var(
                     "a".into(),
-                )),
-                Box::new(Var(
+                ), (0, 0), (0, 1))),
+                Box::new(Expr::new(Var(
                     "b".into(),
-                ))
-            )),
-            Box::new(Var(
+                ), (0, 2), (0, 3)))
+            ), (0, 0), (0, 3))),
+            Box::new(Expr::new(Var(
                 "c".into(),
-            )),
-        )
+            ), (0, 4), (0, 5))),
+        ), (0, 0), (0, 5))
     );
     let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("(a b) c".chars())),
-        App(
-            Box::new(App(
-                Box::new(Var(
-                    "a".into(),
-                )),
-                Box::new(Var(
-                    "b".into(),
-                ))
-            )),
-            Box::new(Var(
-                "c".into(),
-            )),
-        )
+        parser.parse(&mut lexer("(d e) f".chars())),
+        Expr::new(App(
+            Box::new(Expr::new(App(
+                Box::new(Expr::new(Var(
+                    "d".into(),
+                ), (0, 1), (0, 2))),
+                Box::new(Expr::new(Var(
+                    "e".into(),
+                ), (0, 3), (0, 4)))
+            ), (0, 0), (0, 5))),
+            Box::new(Expr::new(Var(
+                "f".into(),
+            ), (0, 6), (0, 7))),
+        ), (0, 0), (0, 7))
     );
     let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("a (b) c".chars())),
-        App(
-            Box::new(App(
-                Box::new(Var(
-                    "a".into(),
-                )),
-                Box::new(Var(
-                    "b".into(),
-                ))
-            )),
-            Box::new(Var(
-                "c".into(),
-            )),
-        )
+        parser.parse(&mut lexer("g (h) j".chars())),
+        Expr::new(App(
+            Box::new(Expr::new(App(
+                Box::new(Expr::new(Var(
+                    "g".into(),
+                ), (0, 0), (0, 1))),
+                Box::new(Expr::new(Var(
+                    "h".into(),
+                ), (0, 3), (0, 4)))
+            ), (0, 0), (0, 5))),
+            Box::new(Expr::new(Var(
+                "j".into(),
+            ), (0, 6), (0, 7))),
+        ), (0, 0), (0, 7))
     );
 }
 
 #[test]
 fn let_abstraction() {
-    use self::Expr::*;
+    use self::ExprType::*;
     use lexer::lexer;
     let mut parser = Parser::new();
     assert_eq!(
         parser.parse(&mut lexer("let x = y in z".chars())),
-        Let(
+        Expr::new(Let(
             "x".into(),
-            Box::new(Var(
+            Box::new(Expr::new(Var(
                 "y".into(),
-            )),
-            Box::new(Var(
+            ), (0, 8), (0, 9))),
+            Box::new(Expr::new(Var(
                 "z".into(),
-            )),
-        )
+            ), (0, 13), (0, 14))),
+        ), (0, 0), (0, 14))
     )
 }

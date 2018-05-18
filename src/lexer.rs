@@ -23,13 +23,21 @@ impl fmt::Debug for Token {
 }
 
 impl Token {
-    fn new(token: TokenType, line: usize, from_column: usize, to_column: usize) -> Self {
+    pub fn new(token: TokenType, line: usize, from_column: usize, to_column: usize) -> Self {
         Token {
             token,
             line,
             from_column,
             to_column,
         }
+    }
+
+    pub fn from(&self) -> (usize, usize) {
+        (self.line, self.from_column)
+    }
+
+    pub fn to(&self) -> (usize, usize) {
+        (self.line, self.to_column)
     }
 }
 
