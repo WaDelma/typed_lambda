@@ -104,17 +104,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
         use self::LexError::*;
         let mut buffer = String::new();
         let mut state = State::General;
-        if let Some(c) = self.prev.take() {
-            return Some(self.tok(match c {
-                '(' => BracketStart,
-                ')' => BracketEnd,
-                '.' => Dot,
-                '=' => Equals,
-                'λ' | '\\' => Lambda,
-                _ => unreachable!("Previous character should be one of '(', ')', '.', '=', '\\', 'λ'."),
-            }));
-        }
-        while let Some(c) = self.iter.next() {
+        while let Some(c) =  self.prev.take().or_else(|| self.iter.next()) {
             self.column += 1;
             match state {
                 State::General => {
@@ -163,9 +153,9 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                     },
                     '(' | ')' | '.' | '=' | 'λ' | '\\' => {
                         self.prev = Some(c);
-                        let column = self.column - 1;
-                        let from_column = column - buffer.len();
-                        return Some(Token::new(Ident(buffer), self.line, from_column, column));
+                        self.column -= 1;
+                        let from_column = self.column - buffer.len();
+                        return Some(Token::new(Ident(buffer), self.line, from_column, self.column));
                     },
                     c => {
                         buffer.push(c);
@@ -178,6 +168,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                             match c {
                                 '(' | ')' | '.' | '=' | 'λ' | '\\' => {
                                     self.prev = Some(c);
+                                    self.column -= 1;
                                     break;
                                 },
                                 c if c.is_whitespace() => {
@@ -191,7 +182,8 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                             }
                         }
                         let from_column = column_to_end - (buffer.len() - 1);
-                        return Some(Token::new(Error(InvalidIdentifier { column, identifier: buffer }), self.line, from_column, column_to_end));
+                        let err = Error(InvalidIdentifier { column, identifier: buffer });
+                        return Some(Token::new(err, self.line, from_column, column_to_end));
                     },
                 },
                 State::Let(n) => match c {
@@ -238,7 +230,8 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
             State::Let(n) => Some(if n == 3 {
                 self.tok(Let)
             } else {
-                Token::new(Ident("let"[0..n as usize].into()), self.line, self.column - n as usize, self.column)
+                let ident = Ident("let"[0..n as usize].into());
+                Token::new(ident, self.line, self.column - n as usize, self.column)
             }),
             State::In(n) => Some(if n == 2 {
                 self.tok(In)

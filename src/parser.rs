@@ -1,5 +1,4 @@
 use std::fmt;
-use std::mem::replace;
 
 use Ident;
 use lexer::Token;
@@ -35,30 +34,55 @@ impl fmt::Debug for Expr {
     }
 }
 
-impl fmt::Display for Expr {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "{}", self.expr)
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum ExprType {
     Error(ParseError),
     Var(Ident),
     App(Box<Expr>, Box<Expr>),
-    Abs(Vec<Ident>, Box<Expr>),
+    Abs(Ident, Box<Expr>),
     Let(Ident, Box<Expr>, Box<Expr>),
 }
 
 impl fmt::Display for ExprType {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         use self::ExprType::*;
-        match *self {
-            Error(ref e) => write!(fmt, "{:?}", e),
-            Var(ref ident) => fmt.write_str(ident),
-            App(ref lhs, ref rhs) => write!(fmt, "({}) {}", lhs, rhs),
-            Abs(ref ident, ref rhs) => write!(fmt, "λ{}.{}", ident.join(" "), rhs),
-            Let(ref ident, ref value, ref target) => write!(fmt, "let {} = {} in {}", ident, value, target),
+        match self {
+            Error(e) => write!(fmt, "{:?}", e),
+            Var(ident) => fmt.write_str(ident),
+            App(lhs, rhs) => {
+                fn apps(lhs: &ExprType, fmt: &mut fmt::Formatter) -> fmt::Result {
+                    match lhs {
+                        App(lhs, rhs) => {
+                            apps(&lhs.expr, fmt)?;
+                            match rhs.expr {
+                                Var(_) => write!(fmt, " {}", rhs.expr),
+                                _ => write!(fmt, " ({})", rhs.expr),
+                            }
+                        }
+                        Var(_) => write!(fmt, "{}", lhs),
+                        _ => write!(fmt, "({})", lhs)
+                    }
+                }
+                apps(&lhs.expr, fmt)?;
+                match rhs.expr {
+                    App(..) => write!(fmt, " ({})", rhs.expr),
+                    _ => write!(fmt, " {}", rhs.expr),
+                }
+            },
+            Abs(ident, rhs) => {
+                write!(fmt, "λ{}", ident)?;
+                fn abss(rhs: &ExprType, fmt: &mut fmt::Formatter) -> fmt::Result {
+                    match rhs {
+                        Abs(ident, rhs) => {
+                            write!(fmt, " {}", ident)?;
+                            abss(&rhs.expr, fmt)
+                        },
+                        _ => write!(fmt, ".{}", rhs)
+                    }
+                }
+                abss(&rhs.expr, fmt)
+            },
+            Let(ident, value, target) => write!(fmt, "let {} = {} in {}", ident, value.expr, target.expr),
         }
     }
 }
@@ -75,6 +99,7 @@ impl From<::lexer::LexError> for ParseError {
     }
 }
 
+#[derive(Debug)]
 enum State {
     General,
     Bracket(BracketState),
@@ -82,25 +107,32 @@ enum State {
     Let(LetState),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum BracketState {
     MiddleS,
     EndS,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum LambdaState {
     ParamS,
     BodyS,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum LetState {
     VarS,
     EqS,
     ValS,
     InS,
     ExprS,
+}
+
+pub enum Command {
+    Bracket,
+    Abs(Ident),
+    LetEmpty(Ident),
+    Let(Ident, Expr)
 }
 
 pub struct Parser {
@@ -131,14 +163,15 @@ impl Parser {
         use self::LetState::*;
         use self::LambdaState::*;
         use self::BracketState::*;
-        let mut params = vec![];
-        let mut value = vec![];
+        let mut commands = vec![];
         let mut expr = None::<Expr>;
         let mut state = State::General;
         let mut start = None;
+        let mut fst = true;
+        let mut to = (0, 0);
         while let Some(token) = self.prev.take().or_else(|| tokens.next()) {
             let from = token.from();
-            let to = token.to();
+            to = token.to();
             match state {
                 State::General => match token.token {
                     Error(err) => chain_apps(
@@ -147,7 +180,8 @@ impl Parser {
                     ),
                     Lambda => {
                         start = Some(from);
-                        state = State::Lambda(LambdaState::ParamS)
+                        fst = true;
+                        state = State::Lambda(LambdaState::ParamS);
                     },
                     BracketStart => {
                         start = Some(from);
@@ -171,15 +205,32 @@ impl Parser {
                 },
                 State::Lambda(n) => match n {
                     ParamS => match token.token {
-                        Ident(i) => params.push(i),
+                        Ident(i) => {
+                            let mut from = from;
+                            if fst {
+                                from = start.unwrap();
+                                fst = false;
+                            }
+                            commands.push((Command::Abs(i), from));
+                        },
                         Dot => state = State::Lambda(BodyS),
                         _ => panic!("Invalid token: {:?}", token),
                     }
                     BodyS => {
                         self.prev = Some(token);
-                        let body = Box::new(self.parse(tokens)); // TODO: Remove recursion
-                        let abs = ExprType::Abs(replace(&mut params, vec![]), body);
-                        chain_apps(&mut expr, Expr::new(abs, start.unwrap(), to));
+                        let body = self.parse(tokens); // TODO: Remove recursion
+                        let to = body.to;
+                        let mut abs = body;
+                        while let Some(c) = commands.pop() {
+                            match c {
+                                (Command::Abs(i), mut from) => {
+                                    abs = Expr::new(ExprType::Abs(i, Box::new(abs)), from, to);
+                                }
+                                _ => commands.push(c),
+                            }
+                        }
+                        chain_apps(&mut expr, abs);
+                        state = State::General;
                     }
                 },
                 State::Bracket(n) => match n {
@@ -199,7 +250,7 @@ impl Parser {
                 State::Let(n) => match n {
                     VarS => match token.token {
                         Ident(i) => {
-                            params.push(i);
+                            commands.push((Command::LetEmpty(i), from));
                             state = State::Let(EqS);
                         },
                         _ => panic!("Invalid token: {:?}", token),
@@ -210,7 +261,11 @@ impl Parser {
                     },
                     ValS => {
                         self.prev = Some(token);
-                        value.push(self.parse(tokens)); // TODO: Remove recursion
+                        let i = match commands.pop().unwrap().0 {
+                            Command::LetEmpty(i) => i,
+                            _ => unreachable!("There has to be LetEmpty command"),
+                        };
+                        commands.push((Command::Let(i, self.parse(tokens)), from)); // TODO: Remove recursion
                         state = State::Let(InS);
                     },
                     InS => match token.token {
@@ -220,25 +275,22 @@ impl Parser {
                     ExprS => {
                         let from = start.unwrap();
                         self.prev = Some(token);
-                        let let_ = ExprType::Let(
-                            params.pop().unwrap(),
-                            Box::new(value.pop().unwrap()),
-                            Box::new(self.parse(tokens)) // TODO: Remove recursion
-                        );
+                        let (i, value) = match commands.pop().unwrap().0 {
+                            Command::Let(i, value) => (i, value),
+                            _ => unreachable!("There has to be Let command"),
+                        };
+                        let target = Box::new(self.parse(tokens));
+                        let let_ = ExprType::Let(i, Box::new(value), target); // TODO: Remove recursion
                         chain_apps(&mut expr, Expr::new(let_, from, to));
                     },
                 },
             }
         }
-        if let Some(e) = expr {
-            e
-        } else {
-            Expr::new(
-                ExprType::Error(ParseError::MissingTokens),
-                (0, 0),
-                (0, 0)
-            )
-        }
+        expr.unwrap_or_else(|| Expr::new(
+            ExprType::Error(ParseError::MissingTokens),
+            to,
+            to
+        ))
     }
 }
 
@@ -250,12 +302,64 @@ fn identity_abstraction() {
     assert_eq!(
         parser.parse(&mut lexer("λx.x".chars())),
         Expr::new(Abs(
-            vec!["x".into()],
+            "x".into(),
             Box::new(Expr::new(Var(
                 "x".into()
             ), (0, 3), (0, 4)))
         ), (0, 0), (0, 4))
-    )
+    );
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.parse(&mut lexer("(λx.x)".chars())),
+        Expr::new(Abs(
+            "x".into(),
+            Box::new(Expr::new(Var(
+                "x".into()
+            ), (0, 4), (0, 5)))
+        ), (0, 0), (0, 6))
+    );
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.parse(&mut lexer("λx.(x)".chars())),
+        Expr::new(Abs(
+            "x".into(),
+            Box::new(Expr::new(Var(
+                "x".into()
+            ), (0, 3), (0, 6)))
+        ), (0, 0), (0, 6))
+    );
+}
+
+#[test]
+fn multiple_param_abstraction() {
+    use self::ExprType::*;
+    use lexer::lexer;
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.parse(&mut lexer("λx y.x".chars())),
+        Expr::new(Abs(
+            "x".into(),
+            Box::new(Expr::new(Abs(
+                "y".into(),
+                Box::new(Expr::new(Var(
+                    "x".into()
+                ), (0, 5), (0, 6)))
+            ), (0, 3), (0, 6)))
+        ), (0, 0), (0, 6))
+    );
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.parse(&mut lexer("λx.λy.x".chars())),
+        Expr::new(Abs(
+            "x".into(),
+            Box::new(Expr::new(Abs(
+                "y".into(),
+                Box::new(Expr::new(Var(
+                    "x".into()
+                ), (0, 6), (0, 7)))
+            ), (0, 3), (0, 7)))
+        ), (0, 0), (0, 7))
+    );
 }
 
 #[test]
@@ -306,7 +410,7 @@ fn application() {
                 ), (0, 0), (0, 1))),
                 Box::new(Expr::new(Var(
                     "h".into(),
-                ), (0, 3), (0, 4)))
+                ), (0, 2), (0, 5)))
             ), (0, 0), (0, 5))),
             Box::new(Expr::new(Var(
                 "j".into(),
@@ -332,4 +436,16 @@ fn let_abstraction() {
             ), (0, 13), (0, 14))),
         ), (0, 0), (0, 14))
     )
+}
+
+
+#[test]
+fn end_to_end() {
+    use lexer::lexer;
+    let mut parser = Parser::new();
+    let code = "let x = λx y.x in x (λx.x x) x (λx.x (x x)) x";
+    assert_eq!(
+        format!("{}", parser.parse(&mut lexer(code.chars())).expr),
+        code
+    );
 }
