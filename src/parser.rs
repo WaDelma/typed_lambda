@@ -218,7 +218,7 @@ impl Parser {
                     }
                     BodyS => {
                         self.prev = Some(token);
-                        let body = self.parse(tokens); // TODO: Remove recursion
+                        let body = self.parse(tokens);
                         let to = body.to;
                         let mut abs = body;
                         while let Some(c) = commands.pop() {
@@ -236,7 +236,7 @@ impl Parser {
                 State::Bracket(n) => match n {
                     MiddleS => {
                         self.prev = Some(token);
-                        let mut ex = self.parse(tokens); // TODO: Remove recursion
+                        let mut ex = self.parse(tokens);
                         ex.from.1 -= 1;
                         ex.to.1 += 1;
                         chain_apps(&mut expr, ex);
@@ -265,7 +265,7 @@ impl Parser {
                             Command::LetEmpty(i) => i,
                             _ => unreachable!("There has to be LetEmpty command"),
                         };
-                        commands.push((Command::Let(i, self.parse(tokens)), from)); // TODO: Remove recursion
+                        commands.push((Command::Let(i, self.parse(tokens)), from));
                         state = State::Let(InS);
                     },
                     InS => match token.token {
@@ -280,17 +280,14 @@ impl Parser {
                             _ => unreachable!("There has to be Let command"),
                         };
                         let target = Box::new(self.parse(tokens));
-                        let let_ = ExprType::Let(i, Box::new(value), target); // TODO: Remove recursion
+                        let let_ = ExprType::Let(i, Box::new(value), target);
                         chain_apps(&mut expr, Expr::new(let_, from, to));
                     },
                 },
             }
         }
-        expr.unwrap_or_else(|| Expr::new(
-            ExprType::Error(ParseError::MissingTokens),
-            to,
-            to
-        ))
+        expr.unwrap_or_else(||
+            Expr::new(ExprType::Error(ParseError::MissingTokens), to, to))
     }
 }
 

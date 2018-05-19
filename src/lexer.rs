@@ -86,6 +86,13 @@ enum State {
     In(u8)
 }
 
+fn is_punctuation(c: char) -> bool {
+    match c {
+        '(' | ')' | '.' | '=' | 'λ' | '\\' => true,
+        _ => false,
+    }
+}
+
 impl<I> Tokens<I> {
     fn tok(&self, token: TokenType) -> Token {
         Token {
@@ -93,6 +100,13 @@ impl<I> Tokens<I> {
             line: self.line,
             from_column: self.column - 1,
             to_column: self.column,
+        }
+    }
+
+    fn check_linebreak(&mut self, c: char) {
+        if c == '\n' {
+            self.line += 1;
+            self.column = 0;
         }
     }
 }
@@ -127,13 +141,9 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                             state = State::Ident;
                             continue;
                         },
-                        '\n' => {
-                            self.line += 1;
-                            self.column = 0;
-                            continue;
-                        },
                         c if c.is_whitespace() => {
-                            continue;
+                            self.check_linebreak(c);
+                            continue
                         },
                         c => Error(UnknownCharacter(c)),
                     };
@@ -145,13 +155,10 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                         let column = self.column - 1;
                         let from_column = column - buffer.len();
                         let tok = Token::new(Ident(buffer), self.line, from_column, column);
-                        if c == '\n' {
-                            self.line += 1;
-                            self.column = 0;
-                        }
+                        self.check_linebreak(c);
                         return Some(tok);
                     },
-                    '(' | ')' | '.' | '=' | 'λ' | '\\' => {
+                    c if is_punctuation(c) => {
                         self.prev = Some(c);
                         self.column -= 1;
                         let from_column = self.column - buffer.len();
@@ -159,31 +166,25 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                     },
                     c => {
                         buffer.push(c);
-                        let column = self.column - 1;
-                        let mut column_to_end = self.column;
+                        let err_column = self.column - 1;
                         while let Some(c) = self.iter.next() {
-                            self.column += 1;
-                            column_to_end += 1;
-                            buffer.push(c);
                             match c {
-                                '(' | ')' | '.' | '=' | 'λ' | '\\' => {
+                                c if is_punctuation(c) => {
                                     self.prev = Some(c);
-                                    self.column -= 1;
                                     break;
                                 },
                                 c if c.is_whitespace() => {
-                                    if c == '\n' {
-                                        self.line += 1;
-                                        self.column = 0;
-                                    }
+                                    self.check_linebreak(c);
                                     break;
                                 },
                                 _ => {},
                             }
+                            self.column += 1;
+                            buffer.push(c);
                         }
-                        let from_column = column_to_end - (buffer.len() - 1);
-                        let err = Error(InvalidIdentifier { column, identifier: buffer });
-                        return Some(Token::new(err, self.line, from_column, column_to_end));
+                        let from_column = self.column - (buffer.len() - 1);
+                        let err = Error(InvalidIdentifier { column: err_column, identifier: buffer });
+                        return Some(Token::new(err, self.line, from_column, self.column));
                     },
                 },
                 State::Let(n) => match c {
@@ -192,10 +193,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                     c if n == 3 => if c.is_whitespace() {
                         let column = self.column - 1;
                         let tok = Token::new(Let, self.line, column - 3, column);
-                        if c == '\n' {
-                            self.line += 1;
-                            self.column = 0;
-                        }
+                        self.check_linebreak(c);
                         return Some(tok);
                     } else {
                         buffer.push_str("let");
@@ -208,10 +206,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                     c if n == 2 => if c.is_whitespace() {
                         let column = self.column - 1;
                         let tok = Token::new(In, self.line, column - 2, column);
-                        if c == '\n' {
-                            self.line += 1;
-                            self.column = 0;
-                        }
+                        self.check_linebreak(c);
                         return Some(tok);
                     } else {
                         buffer.push_str("in");
@@ -374,5 +369,25 @@ fn invalid_identifier() {
                 column: 1,
             }), 0, 0, 3)
         ]
-    )
+    );
+    assert_eq!(
+        lexer("a§d ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Error(InvalidIdentifier {
+                identifier: "a§d".into(),
+                column: 1,
+            }), 0, 0, 3)
+        ]
+    );
+    assert_eq!(
+        lexer("(a§d)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(BracketStart, 0, 0, 1),
+            Token::new(Error(InvalidIdentifier {
+                identifier: "a§d".into(),
+                column: 2,
+            }), 0, 1, 4),
+            Token::new(BracketEnd, 0, 4, 5),
+        ]
+    );
 }
