@@ -189,7 +189,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                 },
                 State::Let(n) => match c {
                     'e' if n == 1 => state = State::Let(2),
-                    't' if n == 2 => state = State::Let(3),
+                    't' if n == 2 => state = State::Let(3),//TODO: "le" should be valid identifier
                     c if n == 3 => if c.is_whitespace() {
                         let column = self.column - 1;
                         let tok = Token::new(Let, self.line, column - 3, column);
@@ -203,13 +203,14 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                 }
                 State::In(n) => match c {
                     'n' if n == 1 => state = State::In(2),
-                    c if n == 2 => if c.is_whitespace() {
+                    c if n == 2 => if c.is_whitespace() {//TODO: Punctuation?
                         let column = self.column - 1;
                         let tok = Token::new(In, self.line, column - 2, column);
                         self.check_linebreak(c);
                         return Some(tok);
                     } else {
                         buffer.push_str("in");
+                        // TODO: Fix not using `c`
                         state = State::Ident;
                     },
                     c => panic!("Unknown character: {} at {}:{}", c, self.line, self.column),

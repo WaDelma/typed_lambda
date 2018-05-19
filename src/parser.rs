@@ -226,7 +226,7 @@ impl Parser {
                                 (Command::Abs(i), mut from) => {
                                     abs = Expr::new(ExprType::Abs(i, Box::new(abs)), from, to);
                                 }
-                                _ => commands.push(c),
+                                _ => commands.push(c), // TODO: Break
                             }
                         }
                         chain_apps(&mut expr, abs);
