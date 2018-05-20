@@ -115,7 +115,7 @@ enum BracketState {
 
 #[derive(Debug, Clone, Copy)]
 enum LambdaState {
-    ParamS,
+    ParamS(bool),
     BodyS,
 }
 
@@ -167,7 +167,6 @@ impl Parser {
         let mut expr = None::<Expr>;
         let mut state = State::General;
         let mut start = None;
-        let mut fst = true;
         let mut to = (0, 0);
         while let Some(token) = self.prev.take().or_else(|| tokens.next()) {
             let from = token.from();
@@ -180,8 +179,7 @@ impl Parser {
                     ),
                     Lambda => {
                         start = Some(from);
-                        fst = true;
-                        state = State::Lambda(LambdaState::ParamS);
+                        state = State::Lambda(LambdaState::ParamS(true));
                     },
                     BracketStart => {
                         start = Some(from);
@@ -204,14 +202,14 @@ impl Parser {
                     _ => panic!("Invalid token: {:?}", token),
                 },
                 State::Lambda(n) => match n {
-                    ParamS => match token.token {
+                    ParamS(fst) => match token.token {
                         Ident(i) => {
-                            let mut from = from;
-                            if fst {
-                                from = start.unwrap();
-                                fst = false;
-                            }
-                            commands.push((Command::Abs(i), from));
+                            commands.push((Command::Abs(i), if fst {
+                                start.unwrap()
+                            } else {
+                                from
+                            }));
+                            state = State::Lambda(ParamS(false));
                         },
                         Dot => state = State::Lambda(BodyS),
                         _ => panic!("Invalid token: {:?}", token),
@@ -222,11 +220,11 @@ impl Parser {
                         let to = body.to;
                         let mut abs = body;
                         while let Some(c) = commands.pop() {
-                            match c {
-                                (Command::Abs(i), mut from) => {
-                                    abs = Expr::new(ExprType::Abs(i, Box::new(abs)), from, to);
-                                }
-                                _ => commands.push(c), // TODO: Break
+                            if let (Command::Abs(i), mut from) = c {
+                                abs = Expr::new(ExprType::Abs(i, Box::new(abs)), from, to);
+                            } else {
+                                commands.push(c);
+                                break;
                             }
                         }
                         chain_apps(&mut expr, abs);
