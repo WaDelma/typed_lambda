@@ -109,6 +109,38 @@ impl<I> Tokens<I> {
             self.column = 0;
         }
     }
+
+    fn lex_keyword(
+        &mut self,
+        state: &mut State,
+        buffer: &mut String,
+        c: char, n: u8,
+        keyword: &str,
+        token: TokenType,
+        state_cons: fn(u8) -> State
+    ) -> Option<Token> {
+        let m = n as usize;
+        if m < keyword.len() {
+            if keyword.as_bytes()[m] == c as u8 {
+                *state = (state_cons)(n + 1);
+                return None;
+            }
+        } else if c.is_whitespace() || is_punctuation(c) {
+            let column = self.column - 1;
+            let tok = Token::new(token, self.line, column - m, column);
+            if is_punctuation(c) {
+                self.prev = Some(c);
+                self.column -= 1;
+            }
+            self.check_linebreak(c);
+            return Some(tok);
+        }
+        self.prev = Some(c);
+        self.column -= 1;
+        buffer.push_str(&keyword[0..m]);
+        *state = State::Ident;
+        return None;
+    }
 }
 
 impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
@@ -187,34 +219,12 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                         return Some(Token::new(err, self.line, from_column, self.column));
                     },
                 },
-                State::Let(n) => match c {
-                    'e' if n == 1 => state = State::Let(2),
-                    't' if n == 2 => state = State::Let(3),//TODO: "le" should be valid identifier
-                    c if n == 3 => if c.is_whitespace() {
-                        let column = self.column - 1;
-                        let tok = Token::new(Let, self.line, column - 3, column);
-                        self.check_linebreak(c);
-                        return Some(tok);
-                    } else {
-                        buffer.push_str("let");
-                        state = State::Ident;
-                    },
-                    c => panic!("Unknown character: {} at {}:{}", c, self.line, self.column),
-                }
-                State::In(n) => match c {
-                    'n' if n == 1 => state = State::In(2),
-                    c if n == 2 => if c.is_whitespace() {//TODO: Punctuation?
-                        let column = self.column - 1;
-                        let tok = Token::new(In, self.line, column - 2, column);
-                        self.check_linebreak(c);
-                        return Some(tok);
-                    } else {
-                        buffer.push_str("in");
-                        // TODO: Fix not using `c`
-                        state = State::Ident;
-                    },
-                    c => panic!("Unknown character: {} at {}:{}", c, self.line, self.column),
-                }
+                State::Let(n) => if let Some(i) = self.lex_keyword(&mut state, &mut buffer, c, n, "let", Let, State::Let) {
+                    return Some(i);
+                },
+                State::In(n) => if let Some(i) = self.lex_keyword(&mut state, &mut buffer, c, n, "in", In, State::In) {
+                    return Some(i);
+                },
             }
         }
         match state {
@@ -314,36 +324,108 @@ fn splitting_lines() {
 }
 
 #[test]
-fn ends_with_i() {
+fn keywords() {
+    use self::TokenType::*;
+    assert_eq!(
+        lexer("let)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Let, 0, 0, 3),
+            Token::new(BracketEnd, 0, 3, 4),
+        ]
+    );
+    assert_eq!(
+        lexer("in)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(In, 0, 0, 2),
+            Token::new(BracketEnd, 0, 2, 3),
+        ]
+    );
+}
+
+#[test]
+fn prefix_of_keyword() {
     use self::TokenType::*;
     assert_eq!(
         lexer("i".chars()).collect::<Vec<_>>(),
         vec![
             Token::new(Ident("i".into()), 0, 0, 1),
         ]
-    )
-}
-
-#[test]
-fn ends_with_l() {
-    use self::TokenType::*;
+    );
+    assert_eq!(
+        lexer("i ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("i".into()), 0, 0, 1),
+        ]
+    );
+    assert_eq!(
+        lexer("i)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("i".into()), 0, 0, 1),
+            Token::new(BracketEnd, 0, 1, 2),
+        ]
+    );
     assert_eq!(
         lexer("l".chars()).collect::<Vec<_>>(),
         vec![
             Token::new(Ident("l".into()), 0, 0, 1),
         ]
-    )
-}
-
-#[test]
-fn ends_with_le() {
-    use self::TokenType::*;
+    );
+    assert_eq!(
+        lexer("l ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("l".into()), 0, 0, 1),
+        ]
+    );
+    assert_eq!(
+        lexer("l)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("l".into()), 0, 0, 1),
+            Token::new(BracketEnd, 0, 1, 2),
+        ]
+    );
     assert_eq!(
         lexer("le".chars()).collect::<Vec<_>>(),
         vec![
             Token::new(Ident("le".into()), 0, 0, 2),
         ]
-    )
+    );
+    assert_eq!(
+        lexer("le ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("le".into()), 0, 0, 2),
+        ]
+    );
+    assert_eq!(
+        lexer("le)".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("le".into()), 0, 0, 2),
+            Token::new(BracketEnd, 0, 2, 3),
+        ]
+    );
+    assert_eq!(
+        lexer("inn".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("inn".into()), 0, 0, 3),
+        ]
+    );
+    assert_eq!(
+        lexer("inn ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("inn".into()), 0, 0, 3),
+        ]
+    );
+    assert_eq!(
+        lexer("lett".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("lett".into()), 0, 0, 4),
+        ]
+    );
+    assert_eq!(
+        lexer("lett ".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Ident("lett".into()), 0, 0, 4),
+        ]
+    );
 }
 
 #[test]
