@@ -9,6 +9,117 @@ use ena::unify::InPlaceUnificationTable as UnificationTable;
 use Ident;
 use parser::Expr;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Mono {
+    Var(Ident),
+    App(TyFun),
+}
+
+impl Mono {
+    fn free(&self) -> HashSet<Ident> {
+        use self::Mono::*;
+        match self {
+            Var(i) => collect![i.clone()],
+            App(a) => a.free(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TyFun {
+    name: Ident,
+    params: Vec<Mono>,
+}
+
+impl TyFun {
+    fn new_fn(param: Mono, result: Mono) -> TyFun {
+        TyFun {
+            name: "->".into(),
+            params: vec![param, result],
+        }
+    }
+
+    fn integer() -> TyFun {
+        TyFun {
+            name: "I32".into(),
+            params: vec![],
+        }
+    }
+
+    fn free(&self) -> HashSet<Ident> {
+        self.params.iter()
+            .flat_map(Mono::free)
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Poly {
+    Mono(Mono),
+    Quan(Ident, Box<Poly>),
+}
+
+impl Poly {
+    fn free(&self) -> HashSet<Ident> {
+        use self::Poly::*;
+        match self {
+            Mono(m) => m.free(),
+            Quan(i, p) => {
+                let mut free = p.free();
+                free.remove(i);
+                free
+            }
+        }
+    }
+}
+
+pub struct Context {
+    types: HashMap<Ident, Poly>,
+}
+
+impl Context {
+    pub fn new() -> Self {
+        Context {
+            types: HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, i: &Ident) -> Option<&Poly> {
+        self.types.get(i)
+    }
+    
+    pub fn insert(&mut self, i: Ident, p: Poly) -> Option<Poly> {
+        self.types.insert(i, p)
+    }
+}
+
+pub fn inst(ty: &Poly) -> Mono {
+    unimplemented!()
+}
+
+pub fn new_var() -> Mono {
+    unimplemented!()
+}
+
+pub fn infer(expr: &Expr, ctx: &mut Context) {
+    use parser::ExprType::*;
+    match &expr.expr {
+        Error(e) => panic!("{:?}", e),
+        Var(i) => {
+            let ty = ctx.get(i).expect("What to do?");
+            let ty = inst(ty);
+            // TODO: What to do?
+        },
+        App(lhs, rhs) => {
+            
+        },
+        Abs(i, body) => {
+            let x = new_var();
+        },
+        Let(var, val, body) => {},
+    }
+}
+
 
 
 // pub struct InferenceTable {

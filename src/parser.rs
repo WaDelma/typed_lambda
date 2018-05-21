@@ -5,9 +5,9 @@ use lexer::Token;
 
 #[derive(PartialEq)]
 pub struct Expr {
-    expr: ExprType,
-    from: (usize, usize),
-    to: (usize, usize),
+    pub expr: ExprType,
+    pub from: (usize, usize),
+    pub to: (usize, usize),
 }
 
 impl Expr {

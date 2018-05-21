@@ -14,7 +14,7 @@ extern crate unicode_xid;
 
 pub mod lexer;
 pub mod parser;
-mod inference;
+pub mod inference;
 // mod test;
 
 type Ident = String;
