@@ -101,23 +101,45 @@ pub fn new_var() -> Mono {
     unimplemented!()
 }
 
-pub fn infer(expr: &Expr, ctx: &mut Context) {
+pub fn unify(a: &Mono, b: &Mono) {
+    unimplemented!()
+}
+
+// TODO: Can this return Quan?
+pub fn infer(expr: &Expr, mut ctx: Context) -> Ctx {
     use parser::ExprType::*;
     match &expr.expr {
         Error(e) => panic!("{:?}", e),
         Var(i) => {
-            let ty = ctx.get(i).expect("What to do?");
-            let ty = inst(ty);
-            // TODO: What to do?
+            let ty = inst(ctx.get(i).expect("TODO"));
+            ctx.insert(i.clone(), Poly::Mono(ty));
         },
         App(lhs, rhs) => {
-            
+            // TODO: This is recursion?
+            let lhs_ty = if let Poly::Mono(m) = ctx.get(lhs).expect("TODO") {
+                m
+            } else {
+                panic!("TODO");
+            };
+            let rhs_ty = if let Poly::Mono(m) = ctx.get(rhs).expect("TODO") {
+                m
+            } else {
+                panic!("TODO");
+            };
+            let ty = new_var();
+            unify(lhs_ty, &Mono::App(TyFun::new_fn(rhs_ty.clone(), ty.clone())));
+            ctx.insert(App(lhs, rhs), Poly::Mono(ty));
         },
         Abs(i, body) => {
-            let x = new_var();
+            let ty = new_var();
+            let mut new_ctx = ctx.clone();
+            new_ctx.insert(i, ty);
+            let ret_ty = infer(body, new_ctx).get(body).clone();
+            ctx.insert(Abs(i, body), ret_ty);
         },
         Let(var, val, body) => {},
     }
+    ctx
 }
 
 

@@ -54,7 +54,7 @@ pub enum TokenType {
     Ident(String)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum LexError {
     UnknownCharacter(char),
     InvalidIdentifier {
