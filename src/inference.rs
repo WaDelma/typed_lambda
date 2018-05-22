@@ -73,6 +73,7 @@ impl Poly {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Context {
     types: HashMap<Ident, Poly>,
 }
@@ -91,55 +92,139 @@ impl Context {
     pub fn insert(&mut self, i: Ident, p: Poly) -> Option<Poly> {
         self.types.insert(i, p)
     }
+
+    pub fn free(&self) -> HashSet<Ident> {
+        self.types.values()
+            .flat_map(Poly::free)
+            .collect()
+    }
 }
 
-pub fn inst(ty: &Poly) -> Mono {
-    unimplemented!()
+pub fn inst(ty: &Poly, m: &mut usize) -> Mono {
+    fn gather_polys<'a>(ty: &'a Poly, replacements: &mut HashMap<Ident, Ident>, m: &mut usize) -> &'a Mono {
+        use self::Poly::*;
+        match ty {
+            Quan(i, e) => {
+                let n = *m;
+                *m += 1;
+                replacements.insert(i.clone(), format!("a{}", n));
+                gather_polys(e, replacements, m)
+            },
+            Mono(m) => m,
+        }
+    }
+    let mut replacements = HashMap::new();
+    let ty = gather_polys(ty, &mut replacements, m);
+    fn replace(ty: &Mono, replacements: &HashMap<Ident, Ident>) -> Mono {
+        use self::Mono::*;
+        match ty {
+            App(f) => App(TyFun {
+                name: f.name.clone(),
+                params: f.params.iter().map(|i| replace(i, replacements)).collect()
+            }),
+            Var(i) => Var(replacements.get(i).unwrap_or(i).clone())
+        }
+    }
+    replace(ty, &replacements)
 }
 
-pub fn new_var() -> Mono {
-    unimplemented!()
+pub fn new_var(m: &mut usize) -> Mono {
+    let n = *m;
+    *m += 1;
+    Mono::Var(format!("a{}", n))
 }
 
-pub fn unify(a: &Mono, b: &Mono) {
-    unimplemented!()
+pub fn unify(ta: &Mono, tb: &Mono, table: &mut UnificationTable<InferVar>) {
+    use self::Mono::*;
+    ta = table.find(ta);
+    tb = table.find(tb);
+    match (ta, tb) {
+        (App(TyFun { name: n1, params: p1 }), App(TyFun { name: n2, params: p2 })) if n1 == n2 && p1.len() == p2.len() => {
+            for (p1, p2) in p1.iter().zip(p2.iter()) {
+                unify(ta, tb, table);
+            }
+        },
+        (a @ Var(_), b) | (b, a @ Var(_)) => {
+            table.union(a, b);
+        },
+        (a, b) => panic!("{:?}, {:?}", a, b),
+    }
+}
+
+pub fn quantify(m: &Mono, ctx: &Context) -> Poly {
+    let mut m = Poly::Mono(m.clone());
+    for var in m.free().difference(&ctx.free()) {
+        m = Poly::Quan(var.clone(), Box::new(m));
+    }
+    m
 }
 
 // TODO: Can this return Quan?
-pub fn infer(expr: &Expr, mut ctx: Context) -> Ctx {
+pub fn infer(expr: &Expr, mut ctx: Context, m: &mut usize, table: &mut UnificationTable<InferVar>) -> Context {
     use parser::ExprType::*;
     match &expr.expr {
         Error(e) => panic!("{:?}", e),
         Var(i) => {
-            let ty = inst(ctx.get(i).expect("TODO"));
+            let ty = inst(ctx.get(i).expect("TODO"), m);
             ctx.insert(i.clone(), Poly::Mono(ty));
         },
         App(lhs, rhs) => {
-            // TODO: This is recursion?
-            let lhs_ty = if let Poly::Mono(m) = ctx.get(lhs).expect("TODO") {
+            let lhs_ty = if let Poly::Mono(m) = infer(lhs, ctx.clone(), m, table).get(&format!("{}", lhs)).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
             };
-            let rhs_ty = if let Poly::Mono(m) = ctx.get(rhs).expect("TODO") {
+            let rhs_ty = if let Poly::Mono(m) = infer(rhs, ctx.clone(), m, table).get(&format!("{}", rhs)).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
             };
-            let ty = new_var();
-            unify(lhs_ty, &Mono::App(TyFun::new_fn(rhs_ty.clone(), ty.clone())));
-            ctx.insert(App(lhs, rhs), Poly::Mono(ty));
+            ctx.insert(format!("{}", lhs), Poly::Mono(lhs_ty.clone()));
+            ctx.insert(format!("{}", rhs), Poly::Mono(rhs_ty.clone()));
+            let ty = new_var(m);
+            unify(&lhs_ty, &Mono::App(TyFun::new_fn(rhs_ty.clone(), ty.clone())), table);
+            ctx.insert(format!("{}", App(lhs.clone(), rhs.clone())), Poly::Mono(ty));
         },
         Abs(i, body) => {
-            let ty = new_var();
+            let ty = new_var(m);
             let mut new_ctx = ctx.clone();
-            new_ctx.insert(i, ty);
-            let ret_ty = infer(body, new_ctx).get(body).clone();
-            ctx.insert(Abs(i, body), ret_ty);
+            new_ctx.insert(i.clone(), Poly::Mono(ty));
+            let ret_ty = infer(body, new_ctx, m, table).get(&format!("{}", body)).unwrap().clone();
+            ctx.insert(format!("{}", body), ret_ty.clone());
+            ctx.insert(format!("{}", Abs(i.clone(), body.clone())), ret_ty);
         },
-        Let(var, val, body) => {},
+        Let(var, val, body) => {
+            let val_ctx = infer(val, ctx.clone(), m, table);
+            let val_ty = if let Poly::Mono(m) = val_ctx.get(&format!("{}", val)).unwrap() {
+                m
+            } else {
+                panic!("TODO");
+            };
+            ctx.insert(format!("{}", val), Poly::Mono(val_ty.clone()));
+            let mut new_ctx = ctx.clone();
+            new_ctx.insert(var.clone(), quantify(val_ty, &ctx));
+            let body_ty = infer(body, new_ctx, m, table).get(&format!("{}", body)).unwrap().clone();
+            ctx.insert(format!("{}", body), body_ty.clone());
+            ctx.insert(format!("{}", Let(var.clone(), val.clone(), body.clone())), body_ty);
+        },
     }
     ctx
+}
+
+#[test]
+fn infer_identity_abstraction() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut parser = Parser::new();
+    panic!("{:?}", infer(&parser.parse(&mut lexer("λx.x".chars())), Context::new(), &mut 0));
+}
+
+#[test]
+fn infer_let() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut parser = Parser::new();
+    panic!("{:?}", infer(&parser.parse(&mut lexer("let x = λx.x in λy.x".chars())), Context::new(), &mut 0));
 }
 
 
@@ -169,47 +254,47 @@ pub fn infer(expr: &Expr, mut ctx: Context) -> Ctx {
 //     }
 // }
 
-// #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-// pub struct InferVar(u32);
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InferVar(u32);
 
-// impl fmt::Debug for InferVar {
-//     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-//         fmt.write_str("InferVar(")?;
-//         write!(fmt, "{}", self.0)?;
-//         fmt.write_str(")")
-//     }
-// }
+impl fmt::Debug for InferVar {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str("InferVar(")?;
+        write!(fmt, "{}", self.0)?;
+        fmt.write_str(")")
+    }
+}
 
-// impl UnifyKey for InferVar {
-//     type Value = InferVal;
-//     fn index(&self) -> u32 {
-//         self.0
-//     }
-//     fn from_index(u: u32) -> Self {
-//         InferVar(u)
-//     }
-//     fn tag() -> &'static str {
-//         "TypeKey"
-//     }
-// }
+impl UnifyKey for InferVar {
+    type Value = InferVal;
+    fn index(&self) -> u32 {
+        self.0
+    }
+    fn from_index(u: u32) -> Self {
+        InferVar(u)
+    }
+    fn tag() -> &'static str {
+        "TypeKey"
+    }
+}
 
-// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-// enum InferVal {
-//     Unbound(i32),
-//     Bound(Mono)
-// }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum InferVal {
+    Unbound(i32),
+    Bound(Mono)
+}
 
-// impl UnifyValue for InferVal {
-//     type Error = ();
-//     fn unify_values<'a>(v1: &'a Self, v2: &'a Self) -> ::std::result::Result<Self, Self::Error> {
-//         use self::InferVal::*;
-//         Ok(match (v1, v2) {
-//             (&Unbound(ref i1), &Unbound(ref i2)) => Unbound(*i1.min(i2)),
-//             (b @ &Bound(_), &Unbound(_)) | (&Unbound(_), b @ &Bound(_)) => b.clone(),
-//             (&Bound(_), &Bound(_)) => Err(())?,
-//         })
-//     }
-// }
+impl UnifyValue for InferVal {
+    type Error = ();
+    fn unify_values<'a>(v1: &'a Self, v2: &'a Self) -> ::std::result::Result<Self, Self::Error> {
+        use self::InferVal::*;
+        Ok(match (v1, v2) {
+            (&Unbound(ref i1), &Unbound(ref i2)) => Unbound(*i1.min(i2)),
+            (b @ &Bound(_), &Unbound(_)) | (&Unbound(_), b @ &Bound(_)) => b.clone(),
+            (&Bound(_), &Bound(_)) => Err(())?,
+        })
+    }
+}
 
 // #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 // pub enum Mono {

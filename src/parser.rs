@@ -3,7 +3,7 @@ use std::fmt;
 use Ident;
 use lexer::Token;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Expr {
     pub expr: ExprType,
     pub from: (usize, usize),
@@ -17,6 +17,13 @@ impl Expr {
             from,
             to,
         }
+    }
+}
+
+
+impl fmt::Display for Expr {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}", self.expr)
     }
 }
 
@@ -34,7 +41,7 @@ impl fmt::Debug for Expr {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExprType {
     Error(ParseError),
     Var(Ident),
@@ -87,7 +94,7 @@ impl fmt::Display for ExprType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParseError {
     LexError(::lexer::LexError),
     MissingTokens,
