@@ -134,18 +134,77 @@ pub fn new_var(m: &mut usize) -> Mono {
     Mono::Var(format!("a{}", n))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InferVar(u32);
+
+impl fmt::Debug for InferVar {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str("InferVar(")?;
+        write!(fmt, "{}", self.0)?;
+        fmt.write_str(")")
+    }
+}
+
+impl UnifyKey for InferVar {
+    type Value = InferVal;
+    fn index(&self) -> u32 {
+        self.0
+    }
+    fn from_index(u: u32) -> Self {
+        InferVar(u)
+    }
+    fn tag() -> &'static str {
+        "TypeKey"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum InferVal {
+    Unbound(i32),
+    Bound(Mono) // TODO: What should be here?
+}
+
+impl UnifyValue for InferVal {
+    type Error = ();
+    fn unify_values<'a>(v1: &'a Self, v2: &'a Self) -> ::std::result::Result<Self, Self::Error> {
+        use self::InferVal::*;
+        Ok(match (v1, v2) {
+            (&Unbound(ref i1), &Unbound(ref i2)) => Unbound(*i1.min(i2)),
+            (b @ &Bound(_), &Unbound(_)) | (&Unbound(_), b @ &Bound(_)) => b.clone(),
+            (&Bound(_), &Bound(_)) => Err(())?,
+        })
+    }
+}
+
 pub fn unify(ta: &Mono, tb: &Mono, table: &mut UnificationTable<InferVar>) {
     use self::Mono::*;
-    ta = table.find(ta);
-    tb = table.find(tb);
+    //In other words, you first check if the LHS or RHS has been unified with a concrete type.
+    //If both have not, then you unify the two variables. If either has, then you "normalize" and repeat:
+
+    //TOOD: ta and tb should always be `Var`s so we can just
+    if let Var(ta) = ta {
+        if let InferVal::Bound(i) = table.probe_value(InferVar(ta[1..].parse().unwrap())) {
+            unify(&i, tb, table);
+            return;
+        }
+    }
+    if let Var(tb) = tb {
+        if let InferVal::Bound(i) = table.probe_value(InferVar(tb[1..].parse().unwrap())) {
+            unify(ta, &i, table);
+            return;
+        }
+    }
     match (ta, tb) {
         (App(TyFun { name: n1, params: p1 }), App(TyFun { name: n2, params: p2 })) if n1 == n2 && p1.len() == p2.len() => {
             for (p1, p2) in p1.iter().zip(p2.iter()) {
-                unify(ta, tb, table);
+                unify(p1, p2, table);
             }
         },
-        (a @ Var(_), b) | (b, a @ Var(_)) => {
-            table.union(a, b);
+        (Var(a), Var(b)) => {
+            table.unify_var_var(InferVar(a[1..].parse().unwrap()), InferVar(b[1..].parse().unwrap())).unwrap();
+        }
+        (Var(a), b) | (b, Var(a)) => {
+            table.unify_var_value(InferVar(a[1..].parse().unwrap()), InferVal::Bound(b.clone())).unwrap();
         },
         (a, b) => panic!("{:?}, {:?}", a, b),
     }
@@ -215,19 +274,30 @@ pub fn infer(expr: &Expr, mut ctx: Context, m: &mut usize, table: &mut Unificati
 fn infer_identity_abstraction() {
     use lexer::lexer;
     use parser::Parser;
+    let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{:?}", infer(&parser.parse(&mut lexer("λx.x".chars())), Context::new(), &mut 0));
+    panic!("{:?}", infer(&parser.parse(&mut lexer("λx.x".chars())), Context::new(), &mut 0, &mut table));
 }
 
 #[test]
 fn infer_let() {
     use lexer::lexer;
     use parser::Parser;
+    let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{:?}", infer(&parser.parse(&mut lexer("let x = λx.x in λy.x".chars())), Context::new(), &mut 0));
+    panic!("{:?}", infer(&parser.parse(&mut lexer("let x = λx.x in λy.x".chars())), Context::new(), &mut 0, &mut table));
 }
 
+#[test]
+fn infer_app() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut table = UnificationTable::new();
+    let mut parser = Parser::new();
+    panic!("{:?}", infer(&parser.parse(&mut lexer("(λx.x)λy.y".chars())), Context::new(), &mut 0, &mut table));
+}
 
+// TODO: Add test with free variable
 
 // pub struct InferenceTable {
 //     unify: UnificationTable<InferVar>,
@@ -253,48 +323,6 @@ fn infer_let() {
 //         })
 //     }
 // }
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InferVar(u32);
-
-impl fmt::Debug for InferVar {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str("InferVar(")?;
-        write!(fmt, "{}", self.0)?;
-        fmt.write_str(")")
-    }
-}
-
-impl UnifyKey for InferVar {
-    type Value = InferVal;
-    fn index(&self) -> u32 {
-        self.0
-    }
-    fn from_index(u: u32) -> Self {
-        InferVar(u)
-    }
-    fn tag() -> &'static str {
-        "TypeKey"
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum InferVal {
-    Unbound(i32),
-    Bound(Mono)
-}
-
-impl UnifyValue for InferVal {
-    type Error = ();
-    fn unify_values<'a>(v1: &'a Self, v2: &'a Self) -> ::std::result::Result<Self, Self::Error> {
-        use self::InferVal::*;
-        Ok(match (v1, v2) {
-            (&Unbound(ref i1), &Unbound(ref i2)) => Unbound(*i1.min(i2)),
-            (b @ &Bound(_), &Unbound(_)) | (&Unbound(_), b @ &Bound(_)) => b.clone(),
-            (&Bound(_), &Bound(_)) => Err(())?,
-        })
-    }
-}
 
 // #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 // pub enum Mono {
