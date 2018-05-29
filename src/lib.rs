@@ -28,6 +28,11 @@ pub enum TypecheckError {
 
 pub type Result<T> = std::result::Result<T, TypecheckError>;
 
+#[cfg(test)]
+fn parse(code: &str) -> parser::Expr {
+    ::parser::Parser::new().parse(&mut ::lexer::lexer(code.chars()))
+}
+
 // // TODO: new_key is called wrongly: There is multiple ununified same things there
 // pub fn check_expr(e: &Expr, ctx: &mut Ctx, creator: &mut VarCreator, ut: &mut UnificationTable<InferVar>, let_depth: usize) -> Result<InferVar> {
 //     use self::Expr::*;

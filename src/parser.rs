@@ -299,10 +299,8 @@ impl Parser {
 #[test]
 fn identity_abstraction() {
     use self::ExprType::*;
-    use lexer::lexer;
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("λx.x".chars())),
+        ::parse("λx.x"),
         Expr::new(Abs(
             "x".into(),
             Box::new(Expr::new(Var(
@@ -310,9 +308,8 @@ fn identity_abstraction() {
             ), (0, 3), (0, 4)))
         ), (0, 0), (0, 4))
     );
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("(λx.x)".chars())),
+        ::parse("(λx.x)"),
         Expr::new(Abs(
             "x".into(),
             Box::new(Expr::new(Var(
@@ -320,9 +317,8 @@ fn identity_abstraction() {
             ), (0, 4), (0, 5)))
         ), (0, 0), (0, 6))
     );
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("λx.(x)".chars())),
+        ::parse("λx.(x)"),
         Expr::new(Abs(
             "x".into(),
             Box::new(Expr::new(Var(
@@ -335,10 +331,8 @@ fn identity_abstraction() {
 #[test]
 fn multiple_param_abstraction() {
     use self::ExprType::*;
-    use lexer::lexer;
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("λx y.x".chars())),
+        ::parse("λx y.x"),
         Expr::new(Abs(
             "x".into(),
             Box::new(Expr::new(Abs(
@@ -349,9 +343,8 @@ fn multiple_param_abstraction() {
             ), (0, 3), (0, 6)))
         ), (0, 0), (0, 6))
     );
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("λx.λy.x".chars())),
+        ::parse("λx.λy.x"),
         Expr::new(Abs(
             "x".into(),
             Box::new(Expr::new(Abs(
@@ -367,10 +360,8 @@ fn multiple_param_abstraction() {
 #[test]
 fn application() {
     use self::ExprType::*;
-    use lexer::lexer;
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("a b c".chars())),
+        ::parse("a b c"),
         Expr::new(App(
             Box::new(Expr::new(App(
                 Box::new(Expr::new(Var(
@@ -385,9 +376,8 @@ fn application() {
             ), (0, 4), (0, 5))),
         ), (0, 0), (0, 5))
     );
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("(d e) f".chars())),
+        ::parse("(d e) f"),
         Expr::new(App(
             Box::new(Expr::new(App(
                 Box::new(Expr::new(Var(
@@ -402,9 +392,8 @@ fn application() {
             ), (0, 6), (0, 7))),
         ), (0, 0), (0, 7))
     );
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("g (h) j".chars())),
+        ::parse("g (h) j"),
         Expr::new(App(
             Box::new(Expr::new(App(
                 Box::new(Expr::new(Var(
@@ -424,10 +413,8 @@ fn application() {
 #[test]
 fn let_abstraction() {
     use self::ExprType::*;
-    use lexer::lexer;
-    let mut parser = Parser::new();
     assert_eq!(
-        parser.parse(&mut lexer("let x = y in z".chars())),
+        ::parse("let x = y in z"),
         Expr::new(Let(
             "x".into(),
             Box::new(Expr::new(Var(
@@ -444,10 +431,9 @@ fn let_abstraction() {
 #[test]
 fn end_to_end() {
     use lexer::lexer;
-    let mut parser = Parser::new();
     let code = "let x = λx y.x in x (λx.x x) x (λx.x (x x)) x";
     assert_eq!(
-        format!("{}", parser.parse(&mut lexer(code.chars())).expr),
+        format!("{}", ::parse(code).expr),
         code
     );
 }
