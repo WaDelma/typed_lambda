@@ -143,11 +143,11 @@ pub fn rename(expr: Expression, from: Ident, to: Ident) -> Expression {
     use self::Expression::*;
     let b = Box::new;
     match expr {
-        Var(i) => if i == from {
-            Var(to)
+        Var(i) => Var(if i == from {
+            to
         } else {
-            Var(i)
-        },
+            i
+        }),
         App(l, r) => App(
             b(rename(*l, from.clone(), to.clone())),
             b(rename(*r, from, to))
@@ -199,12 +199,10 @@ fn rename_variable() {
 pub fn alpha_convert(expr: Expression, to: Ident) -> Expression {
     use self::Expression::*;
     match expr {
-        Abs(i, expr) => {
-            if expr.is_free(&to) || expr.is_binding(&to) {
-                Abs(i, expr)
-            } else {
-                Abs(to.clone(), Box::new(rename(*expr, i, to)))
-            }
+        Abs(i, expr) => if expr.is_free(&to) || expr.is_binding(&to) {
+            Abs(i, expr)
+        } else {
+            Abs(to.clone(), Box::new(rename(*expr, i, to)))
         },
         e => e,
     }
@@ -250,16 +248,11 @@ pub fn substitute(ident_gen: &mut IdentGen, expr: Expression, ident: Ident, valu
             b(substitute(ident_gen, *e1, ident.clone(), value.clone())),
             b(substitute(ident_gen, *e2, ident, value)),
         ),
-        abs @ Abs(..) => {
-            if let Abs(i, e) = alpha_convert(abs, ident_gen.next()) {
-                Abs(
-                    i,
-                    b(substitute(ident_gen, *e, ident, value))
-                )
-            } else {
-                unreachable!("Alpha convert on abstraction shouldn't change expressions type.");
-            }
-        }
+        abs @ Abs(..) => if let Abs(i, e) = alpha_convert(abs, ident_gen.next()) {
+            Abs(i, b(substitute(ident_gen, *e, ident, value)))
+        } else {
+            unreachable!("Alpha convert on abstraction shouldn't change expressions type.");
+        },
         Let(i, val, e) => unimplemented!("What are semantics here?"),
     }
 }
@@ -290,15 +283,15 @@ fn substitute_in_abstraction() {
 }
 
 #[test]
-fn substitute_in_inner_abstraction() {
+fn substitute_with_abstraction() {
     use self::Expression as E;
     assert!(
-        E::from(::parse("λy.(λy.y) y z")).is_alpha_equivalent(
+        E::from(::parse("λx.(λx.y) x z")).is_alpha_equivalent(
             &substitute(
                 &mut IdentGen::new(),
                 E::from(::parse("λy.x y z")),
                 "x".into(),
-                E::from(::parse("λy.y"))
+                E::from(::parse("λx.y"))
             )
         )
     );
@@ -373,17 +366,15 @@ pub fn interpret(mut expr: Expression) -> Expression {
             let b = Box::new;
             match expr {
                 Var(_) => None,
-                App(e1, e2) => {
-                    if let &Abs(..) = &*e1 {
-                        Some(beta_reduce(ident_gen, App(e1, e2)))
-                    } else {
-                        normal_reduction(ident_gen, *e1.clone())
-                            .map(|e1| App(b(e1), e2.clone()))
-                            .or_else(||
-                                normal_reduction(ident_gen, *e2)
-                                    .map(|e2| App(e1, b(e2)))
-                            )
-                    }
+                App(e1, e2) => if let Abs(..) = *e1 {
+                    Some(beta_reduce(ident_gen, App(e1, e2)))
+                } else {
+                    normal_reduction(ident_gen, *e1.clone())
+                        .map(|e1| App(b(e1), e2.clone()))
+                        .or_else(||
+                            normal_reduction(ident_gen, *e2)
+                                .map(|e2| App(e1, b(e2)))
+                        )
                 },
                 Abs(_, e) => normal_reduction(ident_gen, *e),
                 Let(i, val, e) => normal_reduction(ident_gen, *val.clone())

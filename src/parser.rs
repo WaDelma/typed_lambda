@@ -186,15 +186,15 @@ impl Parser {
                     ),
                     Lambda => {
                         start = Some(from);
-                        state = State::Lambda(LambdaState::ParamS(true));
+                        state = State::Lambda(ParamS(true));
                     },
                     BracketStart => {
                         start = Some(from);
-                        state = State::Bracket(BracketState::MiddleS);
+                        state = State::Bracket(MiddleS);
                     },
                     Let => {
                         start = Some(from);
-                        state = State::Let(LetState::VarS);
+                        state = State::Let(VarS);
                     },
                     BracketEnd | In => if let Some(e) = expr {
                         self.prev = Some(token);
@@ -430,7 +430,6 @@ fn let_abstraction() {
 
 #[test]
 fn end_to_end() {
-    use lexer::lexer;
     let code = "let x = λx y.x in x (λx.x x) x (λx.x (x x)) x";
     assert_eq!(
         format!("{}", ::parse(code).expr),

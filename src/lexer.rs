@@ -86,6 +86,33 @@ enum State {
     In(u8)
 }
 
+impl State {
+    fn state_cons(&self) -> (fn(u8) -> State) {
+        use self::State::*;
+        match self {
+            Let(_) => Let,
+            In(_) => In,
+            _ => panic!("Not keyword"),
+        }
+    }
+    fn token_type(&self) -> TokenType {
+        use self::State::*;
+        match self {
+            Let(_) => TokenType::Let,
+            In(_) => TokenType::In,
+            _ => panic!("Doesn't correspond to token type"),
+        }
+    }
+    fn keyword(&self) -> &'static str {
+        use self::State::*;
+        match self {
+            Let(_) => "let",
+            In(_) => "in",
+            _ => panic!("Not keyword"),
+        }
+    }
+}
+
 fn is_punctuation(c: char) -> bool {
     match c {
         '(' | ')' | '.' | '=' | 'λ' | '\\' => true,
@@ -114,20 +141,19 @@ impl<I> Tokens<I> {
         &mut self,
         state: &mut State,
         buffer: &mut String,
-        c: char, n: u8,
-        keyword: &str,
-        token: TokenType,
-        state_cons: fn(u8) -> State
+        c: char,
+        n: u8,
     ) -> Option<Token> {
+        let keyword = state.keyword();
         let m = n as usize;
         if m < keyword.len() {
             if keyword.as_bytes()[m] == c as u8 {
-                *state = (state_cons)(n + 1);
+                *state = (state.state_cons())(n + 1);
                 return None;
             }
         } else if c.is_whitespace() || is_punctuation(c) {
             let column = self.column - 1;
-            let tok = Token::new(token, self.line, column - m, column);
+            let tok = Token::new(state.token_type(), self.line, column - m, column);
             if is_punctuation(c) {
                 self.prev = Some(c);
                 self.column -= 1;
@@ -209,21 +235,22 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                                     self.check_linebreak(c);
                                     break;
                                 },
-                                _ => {},
+                                _ => {
+                                    self.column += 1;
+                                    buffer.push(c);
+                                },
                             }
-                            self.column += 1;
-                            buffer.push(c);
                         }
                         let from_column = self.column - (buffer.len() - 1);
                         let err = Error(InvalidIdentifier { column: err_column, identifier: buffer });
                         return Some(Token::new(err, self.line, from_column, self.column));
                     },
                 },
-                State::Let(n) => if let Some(i) = self.lex_keyword(&mut state, &mut buffer, c, n, "let", Let, State::Let) {
-                    return Some(i);
-                },
-                State::In(n) => if let Some(i) = self.lex_keyword(&mut state, &mut buffer, c, n, "in", In, State::In) {
-                    return Some(i);
+                State::Let(n) | State::In(n) => {
+                    let keyword = self.lex_keyword(&mut state, &mut buffer, c, n);
+                    if keyword.is_some() {
+                        return keyword;
+                    }
                 },
             }
         }
@@ -233,16 +260,11 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
                 let from_column = self.column - buffer.len();
                 Some(Token::new(Ident(buffer), self.line, from_column, self.column))
             },
-            State::Let(n) => Some(if n == 3 {
-                self.tok(Let)
+            State::Let(n) | State::In(n) => Some(if n == state.keyword().len() as u8 {
+                self.tok(state.token_type())
             } else {
-                let ident = Ident("let"[0..n as usize].into());
+                let ident = Ident(state.keyword()[0..n as usize].into());
                 Token::new(ident, self.line, self.column - n as usize, self.column)
-            }),
-            State::In(n) => Some(if n == 2 {
-                self.tok(In)
-            } else {
-                self.tok(Ident("i".into()))
             }),
         }
     }
