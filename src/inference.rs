@@ -23,6 +23,14 @@ impl Mono {
             App(a) => a.free(),
         }
     }
+
+    fn contains(&self, ident: &Ident) -> bool {
+        use self::Mono::*;
+        match self {
+            Var(i) => i == ident,
+            App(TyFun { params, ..}) => params.iter().any(|p| p.contains(ident))
+        }
+    }
 }
 
 impl fmt::Display for Mono {
@@ -258,6 +266,9 @@ pub fn unify(ta: &Mono, tb: &Mono, table: &mut UnificationTable<InferVar>) {
             table.unify_var_var(InferVar(a[1..].parse().unwrap()), InferVar(b[1..].parse().unwrap())).unwrap();
         }
         (Var(a), b) | (b, Var(a)) => {
+            if b.contains(a) {
+                panic!("`{}` occurs in `{}`", a, b);
+            }
             table.unify_var_value(InferVar(a[1..].parse().unwrap()), InferVal::Bound(b.clone())).unwrap();
         },
         (a, b) => panic!("{:?}, {:?}", a, b),
@@ -300,7 +311,8 @@ pub fn infer(expr: &Expr, mut ctx: Context, m: &mut i32, table: &mut Unification
             unify(&lhs_ty, &Mono::App(TyFun::new_fn(rhs_ty.clone(), ty.clone())), table);
             ctx.insert(format!("{}", App(lhs.clone(), rhs.clone())), Poly::Mono(ty));
         },
-        Abs(i, body) => {
+        Abs(i, ty1, body) => {
+            // TODO: Figure what to do with ty1
             let ty = new_var(m, table);
             let mut new_ctx = ctx.clone();
             new_ctx.insert(i.clone(), Poly::Mono(ty.clone()));
@@ -311,7 +323,7 @@ pub fn infer(expr: &Expr, mut ctx: Context, m: &mut i32, table: &mut Unification
                 panic!("TODO");
             };
             ctx.extend(ret_ctx);
-            ctx.insert(format!("{}", Abs(i.clone(), body.clone())), Poly::Mono(Mono::App(TyFun::new_fn(ty, ret_ty))));
+            ctx.insert(format!("{}", Abs(i.clone(), ty1.clone(), body.clone())), Poly::Mono(Mono::App(TyFun::new_fn(ty, ret_ty))));
         },
         Let(var, val, body) => {
             let val_ctx = infer(val, ctx.clone(), m, table);
@@ -367,14 +379,23 @@ fn infer_free() {
     panic!("{}", infer(&parser.parse(&mut lexer("λx.y".chars())), Context::new(), &mut 0, &mut table));
 }
 
-#[ignore] // TODO: Overflows stack
 #[test]
-fn infer_impossible() {
+fn infer_variable_is_integer() {
     use lexer::lexer;
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x x)(λx.x x)".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x)".chars())), Context::new(), &mut 0, &mut table));
+}
+
+#[should_panic]
+#[test]
+fn infer_self_application() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut table = UnificationTable::new();
+    let mut parser = Parser::new();
+    infer(&parser.parse(&mut lexer("λx.x x".chars())), Context::new(), &mut 0, &mut table);
 }
 
 // pub struct InferenceTable {

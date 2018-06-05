@@ -1,6 +1,6 @@
 use std::fmt;
 
-use Ident;
+use {Ident, Type};
 use lexer::Token;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -46,7 +46,7 @@ pub enum ExprType {
     Error(ParseError),
     Var(Ident),
     App(Box<Expr>, Box<Expr>),
-    Abs(Ident, Box<Expr>),
+    Abs(Ident, Option<Type>, Box<Expr>),
     Let(Ident, Box<Expr>, Box<Expr>),
 }
 
@@ -76,12 +76,18 @@ impl fmt::Display for ExprType {
                     _ => write!(fmt, " {}", rhs.expr),
                 }
             },
-            Abs(ident, rhs) => {
+            Abs(ident, ty, rhs) => {
                 write!(fmt, "λ{}", ident)?;
+                if let Some(ty) = ty {
+                    write!(fmt, ":{}", ty)?;
+                }
                 fn abss(rhs: &ExprType, fmt: &mut fmt::Formatter) -> fmt::Result {
                     match rhs {
-                        Abs(ident, rhs) => {
+                        Abs(ident, ty, rhs) => {
                             write!(fmt, " {}", ident)?;
+                            if let Some(ty) = ty {
+                                write!(fmt, ":{}", ty)?;
+                            }
                             abss(&rhs.expr, fmt)
                         },
                         _ => write!(fmt, ".{}", rhs)
@@ -112,6 +118,7 @@ enum State {
     Bracket(BracketState),
     Lambda(LambdaState),
     Let(LetState),
+    TypeAnnotation,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,8 +145,20 @@ enum LetState {
 pub enum Command {
     Bracket,
     Abs(Ident),
+    Type(Type),
     LetEmpty(Ident),
     Let(Ident, Expr)
+}
+
+impl Command {
+    fn is_abs(&self) -> bool {
+        use self::Command::*;
+        if let Abs(_) = self {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub struct Parser {
@@ -218,6 +237,13 @@ impl Parser {
                             }));
                             state = State::Lambda(ParamS(false));
                         },
+                        Colon => {
+                            if commands.last().map(|(c, _)| c.is_abs()).unwrap_or(false) {
+                                state = State::TypeAnnotation;
+                            } else {
+                                panic!("Invalid type annotation");
+                            }
+                        },
                         Dot => state = State::Lambda(BodyS),
                         _ => panic!("Invalid token: {:?}", token),
                     }
@@ -226,18 +252,33 @@ impl Parser {
                         let body = self.parse(tokens);
                         let to = body.to;
                         let mut abs = body;
+                        let mut ty = None;
                         while let Some(c) = commands.pop() {
-                            if let (Command::Abs(i), mut from) = c {
-                                abs = Expr::new(ExprType::Abs(i, Box::new(abs)), from, to);
-                            } else {
-                                commands.push(c);
-                                break;
+                            match c {
+                                (Command::Type(t), _) => ty = Some(t),
+                                (Command::Abs(i), mut from) => {
+                                    let expr_ty = ExprType::Abs(i, ty.take(), Box::new(abs));
+                                    abs = Expr::new(expr_ty, from, to);
+                                },
+                                _ => {
+                                    commands.push(c);
+                                    break;
+                                }
                             }
                         }
                         chain_apps(&mut expr, abs);
                         state = State::General;
                     }
                 },
+                State::TypeAnnotation => {
+                    match token.token {
+                        Ident(i) => {
+                            commands.push((Command::Type(i), from));
+                            state = State::Lambda(ParamS(false));
+                        },
+                        _ => panic!("Invalid token: {:?}", token),
+                    }
+                }
                 State::Bracket(n) => match n {
                     MiddleS => {
                         self.prev = Some(token);
@@ -303,6 +344,7 @@ fn identity_abstraction() {
         ::parse("λx.x"),
         Expr::new(Abs(
             "x".into(),
+            None,
             Box::new(Expr::new(Var(
                 "x".into()
             ), (0, 3), (0, 4)))
@@ -312,6 +354,7 @@ fn identity_abstraction() {
         ::parse("(λx.x)"),
         Expr::new(Abs(
             "x".into(),
+            None,
             Box::new(Expr::new(Var(
                 "x".into()
             ), (0, 4), (0, 5)))
@@ -321,6 +364,7 @@ fn identity_abstraction() {
         ::parse("λx.(x)"),
         Expr::new(Abs(
             "x".into(),
+            None,
             Box::new(Expr::new(Var(
                 "x".into()
             ), (0, 3), (0, 6)))
@@ -335,8 +379,10 @@ fn multiple_param_abstraction() {
         ::parse("λx y.x"),
         Expr::new(Abs(
             "x".into(),
+            None,
             Box::new(Expr::new(Abs(
                 "y".into(),
+                None,
                 Box::new(Expr::new(Var(
                     "x".into()
                 ), (0, 5), (0, 6)))
@@ -347,13 +393,38 @@ fn multiple_param_abstraction() {
         ::parse("λx.λy.x"),
         Expr::new(Abs(
             "x".into(),
+            None,
             Box::new(Expr::new(Abs(
                 "y".into(),
+                None,
                 Box::new(Expr::new(Var(
                     "x".into()
                 ), (0, 6), (0, 7)))
             ), (0, 3), (0, 7)))
         ), (0, 0), (0, 7))
+    );
+}
+
+#[test]
+fn type_annotations() {
+    use self::ExprType::*;
+    assert_eq!(
+        ::parse("λx:ϱ y z:σ.x"),
+        Expr::new(Abs(
+            "x".into(),
+            Some("ϱ".into()),
+            Box::new(Expr::new(Abs(
+                "y".into(),
+                None,
+                Box::new(Expr::new(Abs(
+                    "z".into(),
+                    Some("σ".into()),
+                    Box::new(Expr::new(Var(
+                        "x".into()
+                    ), (0, 11), (0, 12)))
+                ), (0, 7), (0, 12)))
+            ), (0, 5), (0, 12)))
+        ), (0, 0), (0, 12))
     );
 }
 
@@ -430,7 +501,7 @@ fn let_abstraction() {
 
 #[test]
 fn end_to_end() {
-    let code = "let x = λx y.x in x (λx.x x) x (λx.x (x x)) x";
+    let code = "let x = λx:σ y z:ϱ.x in x (λx.x x) x (λx.x (x x)) x";
     assert_eq!(
         format!("{}", ::parse(code).expr),
         code

@@ -9,6 +9,7 @@ pub mod inference;
 pub mod interpreter;
 
 type Ident = String;
+type Type = String;
 
 #[derive(Debug, PartialEq)]
 pub enum TypecheckError {

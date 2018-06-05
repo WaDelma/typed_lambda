@@ -45,6 +45,7 @@ impl Token {
 pub enum TokenType {
     Error(LexError),
     Lambda,
+    Colon,
     BracketStart,
     BracketEnd,
     Dot,
@@ -115,7 +116,7 @@ impl State {
 
 fn is_punctuation(c: char) -> bool {
     match c {
-        '(' | ')' | '.' | '=' | 'λ' | '\\' => true,
+        ':' | '(' | ')' | '.' | '=' | 'λ' | '\\' => true,
         _ => false,
     }
 }
@@ -181,6 +182,7 @@ impl<I: Iterator<Item=char>> Iterator for Tokens<I> {
             match state {
                 State::General => {
                     let tok = match c {
+                        ':' => Colon,
                         '(' => BracketStart,
                         ')' => BracketEnd,
                         '.' => Dot,
@@ -324,6 +326,22 @@ fn let_abstraction() {
             Token::new(Ident("y".into()), 0, 6, 7),
             Token::new(In, 0, 8, 10),
             Token::new(Ident("z".into()), 0, 11, 12)
+        ]
+    )
+}
+
+#[test]
+fn type_annotation() {
+    use self::TokenType::*;
+    assert_eq!(
+        lexer("λx:i.x".chars()).collect::<Vec<_>>(),
+        vec![
+            Token::new(Lambda, 0, 0, 1),
+            Token::new(Ident("x".into()), 0, 1, 2),
+            Token::new(Colon, 0, 2, 3),
+            Token::new(Ident("i".into()), 0, 3, 4),
+            Token::new(Dot, 0, 4, 5),
+            Token::new(Ident("x".into()), 0, 5, 6),
         ]
     )
 }
