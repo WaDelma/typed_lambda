@@ -6,8 +6,89 @@ use std::fmt;
 use ena::unify::{UnifyKey, UnifyValue};
 use ena::unify::InPlaceUnificationTable as UnificationTable;
 
-use Ident;
-use parser::Expr;
+use {Ident, Type};
+
+#[derive(Debug, Clone)]
+pub struct Expr {
+    expr: Expression,
+    id: Ident,
+}
+
+impl Expr {
+    pub fn new(expr: Expression, id: Ident) -> Self {
+        Expr {
+            expr,
+            id
+        }
+    }
+}
+
+impl From<::parser::Expr> for Expr {
+    fn from(e: ::parser::Expr) -> Self {
+        use parser::ExprType::*;
+        use self::Expression as E;
+        fn rec(e: ::parser::Expr, n: &mut u64, vars: &mut HashMap<Ident, Ident>) -> Expr {
+            let b = Box::new;
+            match e.expr {
+                Error(e) => panic!("{:?}", e),
+                Var(i) => {
+                    let i = vars.entry(i).or_insert_with(|| {
+                        let ident = format!("@{}", n);
+                        *n += 1;
+                        ident
+                    });
+                    Expr::new(E::Var(i.clone()), i.clone())
+                },
+                App(e1, e2) => {
+                    let e1 = rec(*e1, n, vars);
+                    *n += 1;
+                    let e2 = rec(*e2, n, vars);
+                    *n += 1;
+                    Expr::new(E::App(b(e1), b(e2)), format!("@{}", n))
+                },
+                Abs(i, ty, e) => {
+                    let e = rec(*e, n, vars);
+                    *n += 1;
+                    Expr::new(E::Abs(vars.entry(i).or_insert_with(|| {
+                        let ident = format!("@{}", n);
+                        *n += 1;
+                        ident
+                    }).clone(), ty.map(|ty| vars.entry(ty).or_insert_with(|| {
+                        let ident = format!("@{}", n);
+                        *n += 1;
+                        ident
+                    }).clone()), b(e)), format!("@{}", n))
+                },
+                Let(i, val, e) => {
+                    let val = rec(*val, n, vars);
+                    *n += 1;
+                    let e = rec(*e, n, vars);
+                    *n += 1;
+                    Expr::new(E::Let(vars.entry(i).or_insert_with(|| {
+                        let ident = format!("@{}", n);
+                        *n += 1;
+                        ident
+                    }).clone(), b(val), b(e)), format!("@{}", n))
+                },
+            }
+        }
+        rec(e, &mut 0, &mut HashMap::new())
+    }
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, lhs: &Self) -> bool {
+        self.id == lhs.id
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Expression {
+    Var(Ident),
+    App(Box<Expr>, Box<Expr>),
+    Abs(Ident, Option<Type>, Box<Expr>),
+    Let(Ident, Box<Expr>, Box<Expr>),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Mono {
@@ -170,7 +251,7 @@ pub fn inst(ty: &Poly, m: &mut i32, table: &mut UnificationTable<InferVar>) -> M
             Quan(i, e) => {
                 let n = *m;
                 *m += 1;
-                replacements.insert(i.clone(), format!("a{}", table.new_key(InferVal::Unbound(n)).0));
+                replacements.insert(i.clone(), format!("#{}", table.new_key(InferVal::Unbound(n)).0));
                 gather_polys(e, replacements, m, table)
             },
             Mono(m) => m,
@@ -191,10 +272,10 @@ pub fn inst(ty: &Poly, m: &mut i32, table: &mut UnificationTable<InferVar>) -> M
     replace(ty, &replacements)
 }
 
-pub fn new_var(m: &mut i32, table: &mut UnificationTable<InferVar>) -> Mono {
+pub fn new_var(m: &mut i32, table: &mut UnificationTable<InferVar>) -> Type {
     let n = *m;
     *m += 1;
-    Mono::Var(format!("a{}", table.new_key(InferVal::Unbound(n)).0))
+    format!("#{}", table.new_key(InferVal::Unbound(n)).0)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,6 +325,8 @@ pub fn unify(ta: &Mono, tb: &Mono, table: &mut UnificationTable<InferVar>) {
     //In other words, you first check if the LHS or RHS has been unified with a concrete type.
     //If both have not, then you unify the two variables. If either has, then you "normalize" and repeat:
 
+    println!("{:?} {:?}", ta, tb);
+
     if let Var(ta) = ta {
         if let InferVal::Bound(i) = table.probe_value(InferVar(ta[1..].parse().unwrap())) {
             unify(&i, tb, table);
@@ -283,51 +366,49 @@ pub fn quantify(m: &Mono, ctx: &Context) -> Poly {
     m
 }
 
-// TODO: Can this return Quan?
 pub fn infer(expr: &Expr, mut ctx: Context, m: &mut i32, table: &mut UnificationTable<InferVar>) -> Context {
-    use parser::ExprType::*;
+    use self::Expression::*;
     match &expr.expr {
-        Error(e) => panic!("{:?}", e),
         Var(i) => {
-            let ty = inst(ctx.get(i).expect("TODO"), m, table);
-            ctx.insert(i.clone(), Poly::Mono(ty));
+            let ty = inst(ctx.get(&expr.id).expect("Unbound variable"), m, table);
+            ctx.insert(expr.id.clone(), Poly::Mono(ty));
         },
         App(lhs, rhs) => {
             let lhs_ctx = infer(lhs, ctx.clone(), m, table);
-            let lhs_ty = if let Poly::Mono(m) = lhs_ctx.get(&format!("{}", lhs)).unwrap().clone() {
+            // TODO: Because of type annotation this fails. Switch to numbering
+            let lhs_ty = if let Poly::Mono(m) = lhs_ctx.get(&lhs.id).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
             };
             let rhs_ctx = infer(rhs, ctx.clone(), m, table);
-            let rhs_ty = if let Poly::Mono(m) = rhs_ctx.get(&format!("{}", rhs)).unwrap().clone() {
+            let rhs_ty = if let Poly::Mono(m) = rhs_ctx.get(&rhs.id).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
             };
             ctx.extend(lhs_ctx);
             ctx.extend(rhs_ctx);
-            let ty = new_var(m, table);
+            let ty = Mono::Var(new_var(m, table));
             unify(&lhs_ty, &Mono::App(TyFun::new_fn(rhs_ty.clone(), ty.clone())), table);
-            ctx.insert(format!("{}", App(lhs.clone(), rhs.clone())), Poly::Mono(ty));
+            ctx.insert(expr.id.clone(), Poly::Mono(ty));
         },
         Abs(i, ty1, body) => {
-            // TODO: Figure what to do with ty1
-            let ty = new_var(m, table);
+            let ty = ty1.clone().unwrap_or_else(|| new_var(m, table));
             let mut new_ctx = ctx.clone();
-            new_ctx.insert(i.clone(), Poly::Mono(ty.clone()));
+            new_ctx.insert(i.clone(), Poly::Mono(Mono::Var(ty.clone())));
             let ret_ctx = infer(body, new_ctx, m, table);
-            let ret_ty = if let Poly::Mono(m) = ret_ctx.get(&format!("{}", body)).unwrap().clone() {
+            let ret_ty = if let Poly::Mono(m) = ret_ctx.get(&body.id).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
             };
             ctx.extend(ret_ctx);
-            ctx.insert(format!("{}", Abs(i.clone(), ty1.clone(), body.clone())), Poly::Mono(Mono::App(TyFun::new_fn(ty, ret_ty))));
+            ctx.insert(expr.id.clone(), Poly::Mono(Mono::App(TyFun::new_fn(Mono::Var(ty), ret_ty))));
         },
         Let(var, val, body) => {
             let val_ctx = infer(val, ctx.clone(), m, table);
-            let val_ty = if let Poly::Mono(m) = val_ctx.get(&format!("{}", val)).unwrap().clone() {
+            let val_ty = if let Poly::Mono(m) = val_ctx.get(&val.id).unwrap().clone() {
                 m
             } else {
                 panic!("TODO");
@@ -335,9 +416,9 @@ pub fn infer(expr: &Expr, mut ctx: Context, m: &mut i32, table: &mut Unification
             ctx.extend(val_ctx);
             let mut new_ctx = ctx.clone();
             new_ctx.insert(var.clone(), quantify(&val_ty, &ctx));
-            let body_ty = infer(body, new_ctx, m, table).get(&format!("{}", body)).unwrap().clone();
-            ctx.insert(format!("{}", body), body_ty.clone());
-            ctx.insert(format!("{}", Let(var.clone(), val.clone(), body.clone())), body_ty);
+            let body_ty = infer(body, new_ctx, m, table).get(&body.id).unwrap().clone();
+            ctx.insert(body.id.clone(), body_ty.clone());
+            ctx.insert(expr.id.clone(), body_ty);
         },
     }
     ctx
@@ -349,7 +430,25 @@ fn infer_identity_abstraction() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("λx.x".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("λx.x".chars())).into(), Context::new(), &mut 0, &mut table));
+}
+
+#[test]
+fn infer_annotated_identity_abstraction() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut table = UnificationTable::new();
+    let mut parser = Parser::new();
+    panic!("{}", infer(&parser.parse(&mut lexer("λx:σ.x".chars())).into(), Context::new(), &mut 0, &mut table));
+}
+
+#[test]
+fn infer_annotated() {
+    use lexer::lexer;
+    use parser::Parser;
+    let mut table = UnificationTable::new();
+    let mut parser = Parser::new();
+    panic!("{}", infer(&parser.parse(&mut lexer("λz.(λx:σ y.y x) z".chars())).into(), Context::new(), &mut 0, &mut table));
 }
 
 #[test]
@@ -358,7 +457,7 @@ fn infer_let() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("let x = λx.x in λy.x".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("let x = λx.x in λy.x".chars())).into(), Context::new(), &mut 0, &mut table));
 }
 
 #[test]
@@ -367,7 +466,7 @@ fn infer_app() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x)λy.y".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x)λy.y".chars())).into(), Context::new(), &mut 0, &mut table));
 }
 
 #[test]
@@ -376,7 +475,7 @@ fn infer_free() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("λx.y".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("λx.y".chars())).into(), Context::new(), &mut 0, &mut table));
 }
 
 #[test]
@@ -385,7 +484,7 @@ fn infer_variable_is_integer() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x)".chars())), Context::new(), &mut 0, &mut table));
+    panic!("{}", infer(&parser.parse(&mut lexer("(λx.x)".chars())).into(), Context::new(), &mut 0, &mut table));
 }
 
 #[should_panic]
@@ -395,7 +494,7 @@ fn infer_self_application() {
     use parser::Parser;
     let mut table = UnificationTable::new();
     let mut parser = Parser::new();
-    infer(&parser.parse(&mut lexer("λx.x x".chars())), Context::new(), &mut 0, &mut table);
+    infer(&parser.parse(&mut lexer("λx.x x".chars())).into(), Context::new(), &mut 0, &mut table);
 }
 
 // pub struct InferenceTable {

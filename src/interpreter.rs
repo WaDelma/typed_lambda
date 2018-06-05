@@ -33,7 +33,7 @@ impl From<Expr> for Expression {
             Error(e) => panic!("{:?}", e),
             Var(i) => E::Var(i),
             App(e1, e2) => E::App(b((*e1).into()), b((*e2).into())),
-            Abs(i, ty, e) => E::Abs(i, b((*e).into())),
+            Abs(i, _, e) => E::Abs(i, b((*e).into())),
             Let(i, val, e) => E::Let(i, b((*val).into()), b((*e).into())),
         }
     }
